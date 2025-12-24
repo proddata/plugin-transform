@@ -74,6 +74,37 @@ go to http://localhost:8080, your plugin will be available to use
 * Full documentation can be found under: [kestra.io/docs](https://kestra.io/docs)
 * Documentation for developing a plugin is included in the [Plugin Developer Guide](https://kestra.io/docs/plugin-developer-guide/)
 
+## Map Task Example
+```yaml
+- id: normalize
+  type: io.kestra.plugin.transform.Map
+  from: "{{ outputs.fetch.records }}"
+
+  fields:
+    customer_id:
+      expr: user.id
+      type: STRING
+    created_at:
+      expr: createdAt
+      type: TIMESTAMP
+    total:
+      expr: sum(items[].price)
+      type: DECIMAL
+
+  options:
+    keepUnknownFields: false
+    dropNulls: true
+    onError: SKIP
+```
+
+You can omit `type` to keep the inferred value, and you can use shorthand for `expr`:
+```yaml
+  fields:
+    customer_id: user.id
+    active_raw:
+      expr: active
+```
+
 
 ## License
 Apache 2.0 © [Kestra Technologies](https://kestra.io)

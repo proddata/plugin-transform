@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+X-Kestra-Name: plugin-transform
+X-Kestra-Title: Transform
+X-Kestra-Group: io.kestra.plugin.transform
+X-Kestra-Description: Transform plugin for Kestra
+X-Kestra-Version: 1.1.0-SNAPSHOT
+
