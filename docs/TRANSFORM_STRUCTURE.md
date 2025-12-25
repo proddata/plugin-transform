@@ -1,6 +1,6 @@
 # Transform Plugin Structure
 
-This document explains how the Map task implementation is organized and how the core classes connect.
+This document explains how the transform tasks are organized and how the core classes connect.
 
 ## High-Level Flow
 
@@ -16,9 +16,21 @@ This document explains how the Map task implementation is organized and how the 
 
 - `src/main/java/io/kestra/plugin/transform/Map.java`
   - The task entrypoint (`RunnableTask`).
-  - Resolves input via `RunContext` (typed rendering, list/map fallbacks).
+  - Resolves input via `TransformTaskSupport` (typed rendering, list/map fallbacks).
   - Builds `FieldMapping` instances from `fields`, allowing shorthand values.
   - Executes the transform engine and emits records or a stored Ion file depending on `output` (AUTO/RECORDS/STORE).
+
+- `src/main/java/io/kestra/plugin/transform/Unnest.java`
+  - Explodes array paths into multiple records.
+  - Uses the same input resolution and Ion streaming helpers as Map.
+
+- `src/main/java/io/kestra/plugin/transform/Filter.java`
+  - Keeps/drops records based on a boolean expression.
+  - Uses the same expression engine and input resolution helpers.
+
+- `src/main/java/io/kestra/plugin/transform/Aggregate.java`
+  - Groups records and computes aggregates.
+  - Uses incremental aggregation state to avoid retaining all records per group.
 
 ### Expression Layer
 
@@ -53,7 +65,7 @@ This document explains how the Map task implementation is organized and how the 
 - `src/main/java/io/kestra/plugin/transform/engine/FieldMapping.java`
   - Immutable mapping definition used internally by the engine.
 
-- `src/main/java/io/kestra/plugin/transform/TransformOptions.java`
+- `src/main/java/io/kestra/plugin/transform/util/TransformOptions.java`
   - Options for null handling, unknown fields, and error behavior.
 
 - `src/main/java/io/kestra/plugin/transform/engine/RecordTransformer.java`
@@ -66,7 +78,7 @@ This document explains how the Map task implementation is organized and how the 
     - Apply `keepUnknownFields`, `dropNulls`, and `onError` rules.
     - Collect field-level errors.
 
-- `src/main/java/io/kestra/plugin/transform/TransformException.java`
+- `src/main/java/io/kestra/plugin/transform/util/TransformException.java`
   - Typed error for transform failures.
 
 ### Execution Layer
@@ -90,6 +102,9 @@ This document explains how the Map task implementation is organized and how the 
   - Ion system helper, conversion utilities, cloning, and Ion-to-Java serialization.
   - Used across expression, casting, and output conversion.
 
+- `src/main/java/io/kestra/plugin/transform/util/TransformTaskSupport.java`
+  - Shared helpers for input resolution, Ion loading, and output stream setup.
+
 ### Plugin Metadata
 
 - `src/main/java/io/kestra/plugin/transform/package-info.java`
@@ -101,13 +116,13 @@ This document explains how the Map task implementation is organized and how the 
 ## Connection Diagram (Conceptual)
 
 ```
-Map task
-  -> DefaultTransformTaskEngine
-       -> DefaultRecordTransformer
-            -> DefaultExpressionEngine
-            -> DefaultIonCaster (optional, only when type provided)
-            -> IonValueUtils (nulls, cloning, conversions)
-  -> IonValueUtils.toJavaValue (output rendering)
+Map/Unnest/Filter/Aggregate
+  -> DefaultTransformTaskEngine (Map only)
+  -> DefaultRecordTransformer (Map only)
+  -> DefaultExpressionEngine
+  -> DefaultIonCaster (optional, only when type provided)
+  -> IonValueUtils (nulls, cloning, conversions)
+  -> TransformTaskSupport (input/output helpers)
 ```
 
 ## Notes on Output

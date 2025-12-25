@@ -1,0 +1,42 @@
+id: dummyjson_carts
+namespace: dev.examples
+
+tasks:
+  - id: download_carts
+    type: io.kestra.plugin.core.http.Download
+    uri: https://dummyjson.com/carts?limit=20
+
+  - id: carts_to_ion
+    type: io.kestra.plugin.serdes.JsonToIon
+    from: "{{ outputs.download_carts.uri }}"
+
+  - id: explode_carts
+    type: io.kestra.plugin.transform.Unnest
+    from: "{{ outputs.carts_to_ion.uri }}"
+    path: carts[]
+    as: cart
+    output: RECORDS
+
+  - id: large_carts
+    type: io.kestra.plugin.transform.Filter
+    from: "{{ outputs.explode_carts.records }}"
+    where: cart.total > 500
+    output: STORE
+
+  - id: project_cart_fields
+    type: io.kestra.plugin.transform.Map
+    from: "{{ outputs.large_carts.uri }}"
+    output: RECORDS
+    fields:
+      id:
+        expr: cart.id
+        type: INT
+      user_id:
+        expr: cart.userId
+        type: INT
+      total:
+        expr: cart.total
+        type: DECIMAL
+      discounted_total:
+        expr: cart.discountedTotal
+        type: DECIMAL
