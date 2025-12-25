@@ -31,6 +31,9 @@ This document explains how the transform tasks are organized and how the core cl
 - `src/main/java/io/kestra/plugin/transform/Aggregate.java`
   - Groups records and computes aggregates.
   - Uses incremental aggregation state to avoid retaining all records per group.
+- `src/main/java/io/kestra/plugin/transform/Zip.java`
+  - Zips two record streams by position and merges their fields.
+  - Supports conflict handling and output modes.
 
 ### Expression Layer
 
@@ -116,7 +119,7 @@ This document explains how the transform tasks are organized and how the core cl
 ## Connection Diagram (Conceptual)
 
 ```
-Map/Unnest/Filter/Aggregate
+Map/Unnest/Filter/Aggregate/Zip
   -> DefaultTransformTaskEngine (Map only)
   -> DefaultRecordTransformer (Map only)
   -> DefaultExpressionEngine

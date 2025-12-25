@@ -91,4 +91,35 @@ class MapFlowTest {
         assertThat(uri != null, is(true));
         assertThat(uri.toString().startsWith("kestra://"), is(true));
     }
+
+    @Test
+    @ExecuteFlow("flows/zip_flow.yaml")
+    void executesZipFlow(Execution execution) {
+        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+
+        List<TaskRun> taskRuns = execution.findTaskRunsByTaskId("zip");
+        TaskRun taskRun = taskRuns.getFirst();
+        Map<String, Object> outputs = (Map<String, Object>) taskRun.getOutputs();
+        List<Map<String, Object>> records = (List<Map<String, Object>>) outputs.get("records");
+
+        assertThat(records.size(), is(2));
+        Map<String, Object> record = records.getFirst();
+        assertThat(record.get("id"), is("a"));
+        assertThat(record.get("status"), is("ok"));
+    }
+
+    @Test
+    @ExecuteFlow("flows/zip_flow_store.yaml")
+    void executesZipStoreFlow(Execution execution) {
+        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+
+        List<TaskRun> taskRuns = execution.findTaskRunsByTaskId("zip");
+        TaskRun taskRun = taskRuns.getFirst();
+        Map<String, Object> outputs = (Map<String, Object>) taskRun.getOutputs();
+
+        assertThat(outputs.containsKey("records"), is(false));
+        Object uri = outputs.get("uri");
+        assertThat(uri != null, is(true));
+        assertThat(uri.toString().startsWith("kestra://"), is(true));
+    }
 }

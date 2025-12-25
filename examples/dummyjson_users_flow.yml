@@ -6,13 +6,9 @@ tasks:
     type: io.kestra.plugin.core.http.Download
     uri: https://dummyjson.com/users?limit=50
 
-  - id: users_to_ion
-    type: io.kestra.plugin.serdes.JsonToIon
-    from: "{{ outputs.download_users.uri }}"
-
   - id: explode_users
     type: io.kestra.plugin.transform.Unnest
-    from: "{{ outputs.users_to_ion.uri }}"
+    from: "{{ outputs.download_users.uri }}"
     path: users[]
     as: user
     output: RECORDS

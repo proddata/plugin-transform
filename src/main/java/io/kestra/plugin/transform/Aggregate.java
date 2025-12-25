@@ -549,8 +549,8 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
     private static final class AggregateState {
         private final AggregateFunction function;
         private BigDecimal sum;
-        private BigDecimal min;
-        private BigDecimal max;
+        private ComparableValue min;
+        private ComparableValue max;
         private long count;
         private IonValue first;
         private IonValue last;
@@ -572,8 +572,8 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             switch (function.type) {
                 case COUNT -> count++;
                 case SUM -> applyDecimal(record, expressionEngine, this::addToSum);
-                case MIN -> applyDecimal(record, expressionEngine, this::updateMin);
-                case MAX -> applyDecimal(record, expressionEngine, this::updateMax);
+                case MIN -> applyComparable(record, expressionEngine, this::updateMin);
+                case MAX -> applyComparable(record, expressionEngine, this::updateMax);
                 case AVG -> applyDecimal(record, expressionEngine, this::addToAvg);
                 case FIRST -> applyValue(record, expressionEngine, this::updateFirst);
                 case LAST -> applyValue(record, expressionEngine, this::updateLast);
@@ -587,8 +587,8 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             return switch (function.type) {
                 case COUNT -> IonValueUtils.system().newInt(count);
                 case SUM -> IonValueUtils.system().newDecimal(sum == null ? BigDecimal.ZERO : sum);
-                case MIN -> min == null ? IonValueUtils.nullValue() : IonValueUtils.system().newDecimal(min);
-                case MAX -> max == null ? IonValueUtils.nullValue() : IonValueUtils.system().newDecimal(max);
+                case MIN -> min == null ? IonValueUtils.nullValue() : IonValueUtils.cloneValue(min.value);
+                case MAX -> max == null ? IonValueUtils.nullValue() : IonValueUtils.cloneValue(max.value);
                 case AVG -> {
                     if (count == 0) {
                         yield IonValueUtils.nullValue();
@@ -619,12 +619,20 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             state.sum = state.sum == null ? value : state.sum.add(value);
         }
 
-        private void updateMin(BigDecimal value, AggregateState state) {
-            state.min = state.min == null ? value : state.min.min(value);
+        private void updateMin(ComparableValue value, AggregateState state) throws CastException {
+            if (state.min == null) {
+                state.min = value;
+                return;
+            }
+            state.min = state.min.compareTo(value) <= 0 ? state.min : value;
         }
 
-        private void updateMax(BigDecimal value, AggregateState state) {
-            state.max = state.max == null ? value : state.max.max(value);
+        private void updateMax(ComparableValue value, AggregateState state) throws CastException {
+            if (state.max == null) {
+                state.max = value;
+                return;
+            }
+            state.max = state.max.compareTo(value) >= 0 ? state.max : value;
         }
 
         private void addToAvg(BigDecimal value, AggregateState state) {
@@ -642,6 +650,33 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             consumer.accept(value, this);
         }
 
+        private void applyComparable(IonStruct record,
+                                     DefaultExpressionEngine expressionEngine,
+                                     ComparableConsumer consumer) throws ExpressionException, TransformException, CastException {
+            IonValue value = expressionEngine.evaluate(function.arg, record);
+            if (IonValueUtils.isNull(value)) {
+                return;
+            }
+            consumer.accept(toComparable(value), this);
+        }
+
+        private ComparableValue toComparable(IonValue value) throws CastException {
+            if (value instanceof com.amazon.ion.IonTimestamp ionTimestamp) {
+                return ComparableValue.forInstant(
+                    value,
+                    java.time.Instant.ofEpochMilli(ionTimestamp.timestampValue().getMillis())
+                );
+            }
+            if (value instanceof com.amazon.ion.IonString ionString) {
+                return ComparableValue.forString(value, ionString.stringValue());
+            }
+            BigDecimal decimal = IonValueUtils.asDecimal(value);
+            if (decimal == null) {
+                throw new CastException("Expected numeric, timestamp, or string value, got " + value.getType());
+            }
+            return ComparableValue.forDecimal(IonValueUtils.system().newDecimal(decimal), decimal);
+        }
+
         private void updateFirst(IonValue value, AggregateState state) {
             if (state.first == null) {
                 state.first = IonValueUtils.cloneValue(value);
@@ -651,6 +686,54 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
         private void updateLast(IonValue value, AggregateState state) {
             state.last = IonValueUtils.cloneValue(value);
         }
+    }
+
+    private interface ComparableConsumer {
+        void accept(ComparableValue value, AggregateState state) throws CastException;
+    }
+
+    private static final class ComparableValue {
+        private final ComparableType type;
+        private final IonValue value;
+        private final Object key;
+
+        private ComparableValue(ComparableType type, IonValue value, Object key) {
+            this.type = type;
+            this.value = value;
+            this.key = key;
+        }
+
+        static ComparableValue forDecimal(IonValue value, BigDecimal key) {
+            return new ComparableValue(ComparableType.DECIMAL, value, key);
+        }
+
+        static ComparableValue forInstant(IonValue value, java.time.Instant key) {
+            return new ComparableValue(ComparableType.TIMESTAMP, value, key);
+        }
+
+        static ComparableValue forString(IonValue value, String key) {
+            return new ComparableValue(ComparableType.STRING, value, key);
+        }
+
+        int compareTo(ComparableValue other) throws CastException {
+            if (other == null) {
+                return 1;
+            }
+            if (this.type != other.type) {
+                throw new CastException("Mismatched types for min/max: " + this.type + " vs " + other.type);
+            }
+            return switch (this.type) {
+                case DECIMAL -> ((BigDecimal) this.key).compareTo((BigDecimal) other.key);
+                case TIMESTAMP -> ((java.time.Instant) this.key).compareTo((java.time.Instant) other.key);
+                case STRING -> ((String) this.key).compareTo((String) other.key);
+            };
+        }
+    }
+
+    private enum ComparableType {
+        DECIMAL,
+        TIMESTAMP,
+        STRING
     }
 
     private static final class StatsAccumulator {

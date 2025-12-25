@@ -44,6 +44,8 @@ class UnnestTest {
         java.util.Map<String, Object> second = (java.util.Map<String, Object>) output.getRecords().get(1);
         assertThat(((java.util.Map<String, Object>) first.get("item")).get("sku"), is("A"));
         assertThat(((java.util.Map<String, Object>) second.get("item")).get("sku"), is("B"));
+        assertThat(first.containsKey("items"), is(false));
+        assertThat(second.containsKey("items"), is(false));
     }
 
     @Test

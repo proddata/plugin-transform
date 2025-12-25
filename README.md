@@ -7,6 +7,7 @@ Typed, streaming-friendly transform tasks for Kestra using Amazon Ion.
 - `io.kestra.plugin.transform.Unnest`: explode array fields into rows
 - `io.kestra.plugin.transform.Filter`: keep/drop records by boolean expression
 - `io.kestra.plugin.transform.Aggregate`: group-by and typed aggregates
+- `io.kestra.plugin.transform.Zip`: merge two record streams by position
 
 ## Input and output
 All tasks accept:
@@ -64,6 +65,7 @@ Unnest + Filter + Map:
       expr: item.price
       type: DECIMAL
 ```
+Note: Unnest drops the exploded array field (`items` here) while keeping other fields.
 
 Aggregate totals:
 ```yaml

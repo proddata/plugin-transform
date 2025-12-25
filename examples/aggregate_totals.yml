@@ -35,7 +35,7 @@ tasks:
         expr: sum(total_spent)
         type: DECIMAL
       last_order_at:
-        expr: max(created_at)
+        expr: max(parseTimestamp(created_at))
         type: TIMESTAMP
 
   - id: log

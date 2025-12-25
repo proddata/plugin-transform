@@ -10,6 +10,7 @@ services:
       - "8080:8080"
     volumes:
       - ./build/libs/:/app/plugins/
+      - ./plugins-local/:/app/plugins/local/
     environment:
       KESTRA_SERVER_BASIC_AUTH_USERNAME: "admin@kestra.io"
       KESTRA_SERVER_BASIC_AUTH_PASSWORD: "!Supersecret1"

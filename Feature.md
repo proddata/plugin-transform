@@ -98,6 +98,23 @@ The Map task is a **declarative “select + rename + derive”** operator: it ta
 - Side effects or parallelism
 - Complex data construction (e.g., struct/list literals) beyond selecting/deriving scalars and traversing existing arrays
 
+#### `io.kestra.plugin.transform.Zip` (current implementation)
+
+The Zip task merges two record streams by position (record i from left with record i from right).
+
+- **Inputs**
+  - `left` and `right` can resolve to lists/maps/Ion values or a storage URI.
+  - Inputs must have the same length.
+
+- **Conflict handling**
+  - `onConflict: FAIL | LEFT | RIGHT` controls how field name collisions are resolved.
+
+- **Error handling**
+  - `onError: FAIL | SKIP` controls whether to drop the record pair or fail the task.
+
+- **Output modes**
+  - `output: AUTO | RECORDS | STORE` follows the same rules as Map.
+
 ### Future Extensions
 
 Once `Map` proves the typed, UI-friendly, statically validatable approach, the next tasks can build on the same core engine:
@@ -113,15 +130,10 @@ A record-level predicate operator:
   - `onError: FAIL | SKIP | KEEP` (or align with `Map`’s modes)
 - Output preserves the original record shape (or optionally supports projecting through `Map`).
 
-#### Union
+#### Join / Union
 
-A multi-input concatenation / schema alignment operator:
-
-- Combines multiple record streams (lists) into one.
-- Optional schema alignment:
-  - strict: require identical field sets and types
-  - permissive: union fields, fill missing with null
-- Useful to merge partitions, branches, or multiple APIs into a single normalized stream.
+- Union: concatenate multiple record streams with optional schema alignment.
+- Join: match records by key(s) for lookup-style enrichments.
 
 #### Aggregate
 

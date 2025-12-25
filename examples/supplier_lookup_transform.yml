@@ -80,15 +80,17 @@ inputs:
       }
 
 tasks:
+  # Explode inventory items into one record per item.
   - id: explode_items
     type: io.kestra.plugin.transform.Unnest
     from: "{{ inputs.inventory_request }}"
     path: items[]
     as: item
     options:
-      keepUnknownFields: false
+      keepOtherFields: false
     output: RECORDS
 
+  # Run supplier lookups (mocked here) per item.
   - id: foreach
     type: io.kestra.plugin.core.flow.ForEach
     values: "{{ outputs.explode_items.records }}"
@@ -98,38 +100,30 @@ tasks:
         type: io.kestra.plugin.core.flow.Parallel
         concurrent: 10
         tasks:
-          - id: subflow_supplier_1
-            type: io.kestra.plugin.core.flow.Subflow
-            flowId: query_supplier_stock
-            namespace: at.conapi
-            inputs:
-              productId: "{{ json(parent.taskrun.value).item.productId }}"
-            wait: true
-          - id: subflow_supplier_2
-            type: io.kestra.plugin.core.flow.Subflow
-            flowId: get_supplier_stock
-            namespace: at.conapi
-            inputs:
-              productId: "{{ json(parent.taskrun.value).item.productId }}"
-            wait: true
-          - id: subflow_supplier_3
-            type: io.kestra.plugin.core.flow.Subflow
-            flowId: get_another_supplier_stock
-            namespace: at.conapi
-            inputs:
-              inventoryId: "{{ json(parent.taskrun.value).item.id }}"
-            wait: true
+          - id: supplier_1
+            type: io.kestra.plugin.core.output.OutputValues
+            values:
+              currentStock: "{{ json(parent.taskrun.value).item.quantityAvailable }}"
+          - id: supplier_2
+            type: io.kestra.plugin.core.output.OutputValues
+            values:
+              currentStock: "{{ json(parent.taskrun.value).item.quantityReserved }}"
+          - id: supplier_3
+            type: io.kestra.plugin.core.output.OutputValues
+            values:
+              currentStock: "{{ json(parent.taskrun.value).item.reorderLevel }}"
       - id: return_enriched_object
         type: io.kestra.plugin.core.output.OutputValues
         values:
           item: "{{ json(taskrun.value).item }}"
           supplierAvailable: >
             {{
-              outputs.subflow_supplier_1[taskrun.value].outputs.currentStock +
-              outputs.subflow_supplier_2[taskrun.value].outputs.currentStock +
-              outputs.subflow_supplier_3[taskrun.value].outputs.currentStock
+              outputs.supplier_1[taskrun.value].values.currentStock +
+              outputs.supplier_2[taskrun.value].values.currentStock +
+              outputs.supplier_3[taskrun.value].values.currentStock
             }}
 
+  # Flatten OutputValues into typed records.
   - id: build_enriched_records
     type: io.kestra.plugin.transform.Map
     from: "{{ outputs.return_enriched_object }}"
@@ -160,6 +154,7 @@ tasks:
         expr: values.supplierAvailable
         type: INT
 
+  # Build the final response payload.
   - id: build_final_payload
     type: io.kestra.plugin.transform.Map
     from: |

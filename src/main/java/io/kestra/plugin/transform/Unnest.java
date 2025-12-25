@@ -56,7 +56,7 @@ import java.util.UUID;
                 "path: items[]",
                 "as: item",
                 "options:",
-                "  keepUnknownFields: true",
+                "  keepOtherFields: true",
                 "  onError: FAIL"
             }
         )
@@ -120,12 +120,15 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
             ? (resolvedInput.fromStorage() ? OutputMode.STORE : OutputMode.RECORDS)
             : output;
 
+        List<String> pathSegments = parsePathSegments(pathExpr);
+
         if (resolvedInput.fromStorage() && effectiveOutput == OutputMode.STORE) {
             URI storedUri = unnestStreamToStorage(
                 runContext,
                 resolvedInput.storageUri(),
                 pathExpr,
                 asField,
+                pathSegments,
                 expressionEngine,
                 stats
             );
@@ -144,6 +147,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                 records,
                 pathExpr,
                 asField,
+                pathSegments,
                 expressionEngine,
                 stats
             );
@@ -155,7 +159,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                 .build();
         }
 
-        List<Object> rendered = expandToRecords(records, pathExpr, asField, expressionEngine, stats);
+        List<Object> rendered = expandToRecords(records, pathExpr, asField, pathSegments, expressionEngine, stats);
         runContext.metric(Counter.of("processed", stats.processed))
             .metric(Counter.of("failed", stats.failed))
             .metric(Counter.of("dropped", stats.dropped));
@@ -174,6 +178,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
     private List<Object> expandToRecords(List<IonStruct> records,
                                          String pathExpr,
                                          String asField,
+                                         List<String> pathSegments,
                                          DefaultExpressionEngine expressionEngine,
                                          StatsAccumulator stats) throws TransformException {
         List<Object> outputRecords = new ArrayList<>();
@@ -192,7 +197,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                     continue;
                 }
                 for (IonValue element : list) {
-                    IonStruct output = buildOutputRecord(record, asField, element, options.keepUnknownFields);
+                    IonStruct output = buildOutputRecord(record, asField, element, options.keepOtherFields, pathSegments);
                     outputRecords.add(IonValueUtils.toJavaValue(output));
                 }
             } catch (ExpressionException | TransformException e) {
@@ -205,7 +210,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                     continue;
                 }
                 if (options.onError == TransformOptions.OnErrorMode.NULL) {
-                    IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepUnknownFields);
+                    IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepOtherFields, pathSegments);
                     outputRecords.add(IonValueUtils.toJavaValue(output));
                 }
             }
@@ -217,6 +222,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                              List<IonStruct> records,
                              String pathExpr,
                              String asField,
+                             List<String> pathSegments,
                              DefaultExpressionEngine expressionEngine,
                              StatsAccumulator stats) throws TransformException {
         String name = "unnest-" + UUID.randomUUID() + ".ion";
@@ -240,7 +246,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                             continue;
                         }
                         for (IonValue element : list) {
-                            IonStruct output = buildOutputRecord(record, asField, element, options.keepUnknownFields);
+                            IonStruct output = buildOutputRecord(record, asField, element, options.keepOtherFields, pathSegments);
                             output.writeTo(writer);
                             outputStream.write('\n');
                         }
@@ -254,7 +260,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                             continue;
                         }
                         if (options.onError == TransformOptions.OnErrorMode.NULL) {
-                            IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepUnknownFields);
+                            IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepOtherFields, pathSegments);
                             output.writeTo(writer);
                             outputStream.write('\n');
                         }
@@ -272,6 +278,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                                       URI uri,
                                       String pathExpr,
                                       String asField,
+                                      List<String> pathSegments,
                                       DefaultExpressionEngine expressionEngine,
                                       StatsAccumulator stats) throws TransformException {
         String name = "unnest-" + UUID.randomUUID() + ".ion";
@@ -293,10 +300,30 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                     IonValue value = iterator.next();
                     if (value instanceof IonList list) {
                         for (IonValue element : list) {
-                            index = processStreamRecord(element, index, pathExpr, asField, expressionEngine, stats, writer, outputStream);
+                            index = processStreamRecord(
+                                element,
+                                index,
+                                pathExpr,
+                                asField,
+                                pathSegments,
+                                expressionEngine,
+                                stats,
+                                writer,
+                                outputStream
+                            );
                         }
                     } else {
-                        index = processStreamRecord(value, index, pathExpr, asField, expressionEngine, stats, writer, outputStream);
+                        index = processStreamRecord(
+                            value,
+                            index,
+                            pathExpr,
+                            asField,
+                            pathSegments,
+                            expressionEngine,
+                            stats,
+                            writer,
+                            outputStream
+                        );
                     }
                 }
                 writer.finish();
@@ -311,6 +338,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                                     int index,
                                     String pathExpr,
                                     String asField,
+                                    List<String> pathSegments,
                                     DefaultExpressionEngine expressionEngine,
                                     StatsAccumulator stats,
                                     IonWriter writer,
@@ -329,7 +357,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                 return index + 1;
             }
             for (IonValue element : list) {
-                IonStruct output = buildOutputRecord(record, asField, element, options.keepUnknownFields);
+                IonStruct output = buildOutputRecord(record, asField, element, options.keepOtherFields, pathSegments);
                 output.writeTo(writer);
                 outputStream.write('\n');
             }
@@ -343,7 +371,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                 return index + 1;
             }
             if (options.onError == TransformOptions.OnErrorMode.NULL) {
-                IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepUnknownFields);
+                IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepOtherFields, pathSegments);
                 output.writeTo(writer);
                 outputStream.write('\n');
             }
@@ -351,15 +379,63 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
         return index + 1;
     }
 
-    private IonStruct buildOutputRecord(IonStruct input, String asField, IonValue element, boolean keepUnknownFields) {
+    private IonStruct buildOutputRecord(IonStruct input,
+                                        String asField,
+                                        IonValue element,
+                                        boolean keepOtherFields,
+                                        List<String> pathSegments) {
         IonStruct output = IonValueUtils.system().newEmptyStruct();
-        if (keepUnknownFields) {
+        if (keepOtherFields) {
             for (IonValue value : input) {
                 output.put(value.getFieldName(), IonValueUtils.cloneValue(value));
             }
+            removeArrayField(output, pathSegments);
         }
         output.put(asField, IonValueUtils.cloneValue(element == null ? IonValueUtils.nullValue() : element));
         return output;
+    }
+
+    private void removeArrayField(IonStruct output, List<String> pathSegments) {
+        if (pathSegments == null || pathSegments.isEmpty()) {
+            return;
+        }
+        IonStruct current = output;
+        for (int i = 0; i < pathSegments.size() - 1; i++) {
+            IonValue next = current.get(pathSegments.get(i));
+            if (!(next instanceof IonStruct struct)) {
+                return;
+            }
+            current = struct;
+        }
+        current.remove(pathSegments.get(pathSegments.size() - 1));
+    }
+
+    private List<String> parsePathSegments(String pathExpr) {
+        if (pathExpr == null) {
+            return null;
+        }
+        String trimmed = pathExpr.trim();
+        if (trimmed.isEmpty() || trimmed.contains("(") || trimmed.contains(" ")) {
+            return null;
+        }
+        String[] segments = trimmed.split("\\.");
+        List<String> names = new ArrayList<>();
+        for (int i = 0; i < segments.length; i++) {
+            String segment = segments[i].trim();
+            if (segment.isEmpty()) {
+                return null;
+            }
+            boolean isArray = segment.endsWith("[]");
+            String name = isArray ? segment.substring(0, segment.length() - 2) : segment;
+            if (name.isEmpty()) {
+                return null;
+            }
+            if (isArray && i != segments.length - 1) {
+                return null;
+            }
+            names.add(name);
+        }
+        return names;
     }
 
     private static final class StatsAccumulator {
@@ -392,8 +468,11 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
     @AllArgsConstructor
     public static class Options {
         @Builder.Default
-        @Schema(title = "Keep unknown fields")
-        private boolean keepUnknownFields = true;
+        @Schema(
+            title = "Keep other fields",
+            description = "Keeps original fields other than the exploded array field."
+        )
+        private boolean keepOtherFields = true;
 
         @Builder.Default
         @Schema(title = "On error behavior")

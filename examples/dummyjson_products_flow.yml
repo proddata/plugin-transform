@@ -6,13 +6,9 @@ tasks:
     type: io.kestra.plugin.core.http.Download
     uri: https://dummyjson.com/products?limit=50
 
-  - id: products_to_ion
-    type: io.kestra.plugin.serdes.JsonToIon
-    from: "{{ outputs.download_products.uri }}"
-
   - id: explode_products
     type: io.kestra.plugin.transform.Unnest
-    from: "{{ outputs.products_to_ion.uri }}"
+    from: "{{ outputs.download_products.uri }}"
     path: products[]
     as: product
     output: RECORDS

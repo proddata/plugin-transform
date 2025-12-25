@@ -82,6 +82,35 @@ class AggregateTest {
     }
 
     @Test
+    void aggregatesMaxTimestamp() throws Exception {
+        java.util.Map<String, Object> first = java.util.Map.of(
+            "customer_id", "c1",
+            "created_at", "2024-01-01T00:00:00Z"
+        );
+        java.util.Map<String, Object> second = java.util.Map.of(
+            "customer_id", "c1",
+            "created_at", "2024-01-02T00:00:00Z"
+        );
+
+        Aggregate task = Aggregate.builder()
+            .from(Property.ofValue(List.of(first, second)))
+            .groupBy(Property.ofValue(List.of("customer_id")))
+            .aggregates(java.util.Map.of(
+                "last_order_at", Aggregate.AggregateDefinition.builder()
+                    .expr("max(parseTimestamp(created_at))")
+                    .type(IonTypeName.TIMESTAMP)
+                    .build()
+            ))
+            .build();
+
+        RunContext runContext = runContextFactory.of(java.util.Map.of());
+        Aggregate.Output output = task.run(runContext);
+
+        java.util.Map<String, Object> mapped = (java.util.Map<String, Object>) output.getRecords().getFirst();
+        assertThat(mapped.get("last_order_at"), is("2024-01-02T00:00:00Z"));
+    }
+
+    @Test
     void rejectsMissingGroupBy() {
         Aggregate task = Aggregate.builder()
             .from(Property.ofValue(List.of()))

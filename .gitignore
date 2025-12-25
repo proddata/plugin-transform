@@ -2,6 +2,7 @@ Thumbs.db
 .DS_Store
 .gradle
 build/
+plugins-local/*
 target/
 out/
 .idea
