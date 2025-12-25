@@ -17,12 +17,14 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import java.io.BufferedWriter;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -49,13 +51,22 @@ class BenchTest {
 
             for (int sizeMb : sizesMb) {
                 Path inputPath = benchDir.resolve("input-" + sizeMb + "mb.ion");
-                long generationMs = generateIonFile(inputPath, sizeMb);
-                long inputBytes = Files.size(inputPath);
+                GenerationResult generation = ensureIonFile(inputPath, sizeMb);
+                long inputBytes = generation.bytes();
 
                 String inputUri = storeInput(runContext, inputPath);
 
                 writer.write("Input: " + inputPath.getFileName() + " (" + inputBytes + " bytes)\n");
-                writer.write("Generate: " + generationMs + " ms\n");
+                writer.write("Generate: " + generation.durationMs() + " ms"
+                    + (generation.generated() ? "" : " (cached)") + "\n");
+
+                BenchResult read = timeTaskWithMemory(() -> runReadOnly(runContext, inputUri));
+                writer.write(formatResult("Read", read));
+                writer.flush();
+
+                BenchResult copy = timeTaskWithMemory(() -> runCopy(runContext, inputUri));
+                writer.write(formatResult("Copy", copy));
+                writer.flush();
 
                 BenchResult map = timeTaskWithMemory(() -> runMap(runContext, inputUri));
                 writer.write(formatResult("Map", map));
@@ -94,26 +105,28 @@ class BenchTest {
         return sizes;
     }
 
-    private long generateIonFile(Path path, int sizeMb) throws IOException {
+    private GenerationResult ensureIonFile(Path path, int sizeMb) throws IOException {
+        if (Files.exists(path)) {
+            return new GenerationResult(false, 0L, Files.size(path));
+        }
         long targetBytes = sizeMb * 1024L * 1024L;
         long start = System.nanoTime();
-        long written = 0L;
         int index = 0;
 
         try (OutputStream fileStream = Files.newOutputStream(path);
              OutputStream outputStream = new java.io.BufferedOutputStream(fileStream);
              CountingOutputStream countingStream = new CountingOutputStream(outputStream);
              IonWriter writer = IonValueUtils.system().newTextWriter(countingStream)) {
-            while (written < targetBytes) {
+            while (countingStream.getCount() < targetBytes) {
                 IonStruct record = createRecord(index++);
                 record.writeTo(writer);
                 countingStream.write('\n');
-                written = countingStream.getCount();
             }
             writer.finish();
         }
 
-        return Duration.ofNanos(System.nanoTime() - start).toMillis();
+        long durationMs = Duration.ofNanos(System.nanoTime() - start).toMillis();
+        return new GenerationResult(true, durationMs, Files.size(path));
     }
 
     private IonStruct createRecord(int index) {
@@ -154,6 +167,46 @@ class BenchTest {
             ))
             .build();
         task.run(runContext);
+    }
+
+    private void runReadOnly(RunContext runContext, String uri) throws Exception {
+        try (InputStream inputStream = runContext.storage().getFile(java.net.URI.create(uri))) {
+            Iterator<IonValue> iterator = IonValueUtils.system().iterate(inputStream);
+            while (iterator.hasNext()) {
+                IonValue value = iterator.next();
+                if (value instanceof IonList list) {
+                    for (IonValue element : list) {
+                        element.getType();
+                    }
+                } else {
+                    value.getType();
+                }
+            }
+        }
+    }
+
+    private void runCopy(RunContext runContext, String uri) throws Exception {
+        try (InputStream inputStream = runContext.storage().getFile(java.net.URI.create(uri))) {
+            Path outputPath = runContext.workingDir().createTempFile(".ion");
+            try (OutputStream fileStream = java.nio.file.Files.newOutputStream(outputPath);
+                 OutputStream outputStream = new java.io.BufferedOutputStream(fileStream);
+                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                Iterator<IonValue> iterator = IonValueUtils.system().iterate(inputStream);
+                while (iterator.hasNext()) {
+                    IonValue value = iterator.next();
+                    if (value instanceof IonList list) {
+                        for (IonValue element : list) {
+                            element.writeTo(writer);
+                            outputStream.write('\n');
+                        }
+                    } else {
+                        value.writeTo(writer);
+                        outputStream.write('\n');
+                    }
+                }
+                writer.finish();
+            }
+        }
     }
 
     private void runUnnest(RunContext runContext, String uri) throws Exception {
@@ -218,6 +271,9 @@ class BenchTest {
     }
 
     private record BenchResult(long durationMs, long beforeBytes, long afterBytes) {
+    }
+
+    private record GenerationResult(boolean generated, long durationMs, long bytes) {
     }
 
     @FunctionalInterface

@@ -13,6 +13,7 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextProperty;
+import io.kestra.core.serializers.FileSerde;
 import io.kestra.plugin.transform.expression.DefaultExpressionEngine;
 import io.kestra.plugin.transform.expression.ExpressionException;
 import io.kestra.plugin.transform.ion.CastException;
@@ -276,7 +277,8 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
         String name = "aggregate-" + UUID.randomUUID() + ".ion";
         try {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
-            try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
+            try (OutputStream fileStream = java.nio.file.Files.newOutputStream(outputPath);
+                 OutputStream outputStream = new java.io.BufferedOutputStream(fileStream, FileSerde.BUFFER_SIZE);
                  IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
                 for (GroupBucket bucket : grouped.values()) {
                     IonStruct output = aggregateBucket(bucket, groupByFields, mappings, caster, stats);

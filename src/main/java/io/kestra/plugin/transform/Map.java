@@ -13,6 +13,7 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextProperty;
+import io.kestra.core.serializers.FileSerde;
 import io.kestra.plugin.transform.engine.DefaultRecordTransformer;
 import io.kestra.plugin.transform.engine.DefaultTransformTaskEngine;
 import io.kestra.plugin.transform.engine.FieldMapping;
@@ -267,7 +268,8 @@ public class Map extends Task implements RunnableTask<Map.Output> {
 
         try (InputStream stream = inputStream) {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
-            try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
+            try (OutputStream fileStream = java.nio.file.Files.newOutputStream(outputPath);
+                 OutputStream outputStream = new java.io.BufferedOutputStream(fileStream, FileSerde.BUFFER_SIZE);
                  IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
                 Iterator<IonValue> iterator = IonValueUtils.system().iterate(stream);
                 int index = 0;
@@ -373,7 +375,8 @@ public class Map extends Task implements RunnableTask<Map.Output> {
         String name = "transform-" + UUID.randomUUID() + ".ion";
         try {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
-            try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
+            try (OutputStream fileStream = java.nio.file.Files.newOutputStream(outputPath);
+                 OutputStream outputStream = new java.io.BufferedOutputStream(fileStream, FileSerde.BUFFER_SIZE);
                  IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
                 for (IonStruct record : records) {
                     if (record == null) {

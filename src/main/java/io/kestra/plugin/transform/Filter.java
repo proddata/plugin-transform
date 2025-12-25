@@ -13,6 +13,7 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextProperty;
+import io.kestra.core.serializers.FileSerde;
 import io.kestra.plugin.transform.expression.DefaultExpressionEngine;
 import io.kestra.plugin.transform.expression.ExpressionException;
 import io.kestra.plugin.transform.ion.IonValueUtils;
@@ -188,7 +189,8 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
         String name = "filter-" + UUID.randomUUID() + ".ion";
         try {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
-            try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
+            try (OutputStream fileStream = java.nio.file.Files.newOutputStream(outputPath);
+                 OutputStream outputStream = new java.io.BufferedOutputStream(fileStream, FileSerde.BUFFER_SIZE);
                  IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
                 for (int i = 0; i < records.size(); i++) {
                     IonStruct record = records.get(i);
@@ -241,7 +243,8 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
 
         try (InputStream stream = inputStream) {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
-            try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
+            try (OutputStream fileStream = java.nio.file.Files.newOutputStream(outputPath);
+                 OutputStream outputStream = new java.io.BufferedOutputStream(fileStream, FileSerde.BUFFER_SIZE);
                  IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
                 Iterator<IonValue> iterator = IonValueUtils.system().iterate(stream);
                 while (iterator.hasNext()) {
