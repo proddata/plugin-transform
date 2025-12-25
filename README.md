@@ -1,80 +1,24 @@
-<p align="center">
-  <a href="https://www.kestra.io">
-    <img src="https://kestra.io/banner.png"  alt="Kestra workflow orchestrator" />
-  </a>
-</p>
+# Kestra Transform Plugin
 
-<h1 align="center" style="border-bottom: none">
-    Event-Driven Declarative Orchestrator
-</h1>
+Typed, streaming-friendly transform tasks for Kestra using Amazon Ion.
 
-<div align="center">
- <a href="https://github.com/kestra-io/kestra/releases"><img src="https://img.shields.io/github/tag-pre/kestra-io/kestra.svg?color=blueviolet" alt="Last Version" /></a>
-  <a href="https://github.com/kestra-io/kestra/blob/develop/LICENSE"><img src="https://img.shields.io/github/license/kestra-io/kestra?color=blueviolet" alt="License" /></a>
-  <a href="https://github.com/kestra-io/kestra/stargazers"><img src="https://img.shields.io/github/stars/kestra-io/kestra?color=blueviolet&logo=github" alt="Github star" /></a> <br>
-<a href="https://kestra.io"><img src="https://img.shields.io/badge/Website-kestra.io-192A4E?color=blueviolet" alt="Kestra infinitely scalable orchestration and scheduling platform"></a>
-<a href="https://kestra.io/slack"><img src="https://img.shields.io/badge/Slack-Join%20Community-blueviolet?logo=slack" alt="Slack"></a>
-</div>
+## Tasks
+- `io.kestra.plugin.transform.Map`: project/rename/cast fields
+- `io.kestra.plugin.transform.Unnest`: explode array fields into rows
+- `io.kestra.plugin.transform.Filter`: keep/drop records by boolean expression
+- `io.kestra.plugin.transform.Aggregate`: group-by and typed aggregates
 
-<br />
+## Input and output
+All tasks accept:
+- `from`: in-memory records (map/list/Ion) or a storage URI (`kestra://...`)
 
-<p align="center">
-  <a href="https://twitter.com/kestra_io" style="margin: 0 10px;">
-        <img src="https://kestra.io/twitter.svg" alt="twitter" width="35" height="25" /></a>
-  <a href="https://www.linkedin.com/company/kestra/" style="margin: 0 10px;">
-        <img src="https://kestra.io/linkedin.svg" alt="linkedin" width="35" height="25" /></a>
-  <a href="https://www.youtube.com/@kestra-io" style="margin: 0 10px;">
-        <img src="https://kestra.io/youtube.svg" alt="youtube" width="35" height="25" /></a>
-</p>
+Output mode (`output`) supports:
+- `AUTO` (default): STORE if `from` is a storage URI, else RECORDS
+- `RECORDS`: emit `outputs.records`
+- `STORE`: write newline-delimited Ion to internal storage and emit `outputs.uri`
 
-<br />
-<p align="center">
-    <a href="https://go.kestra.io/video/product-overview" target="_blank">
-        <img src="https://kestra.io/startvideo.png" alt="Get started in 3 minutes with Kestra" width="640px" />
-    </a>
-</p>
-<p align="center" style="color:grey;"><i>Get started with Kestra in 3 minutes.</i></p>
-
-
-# Kestra Plugin Template
-
-> A template for creating Kestra plugins
-
-This repository serves as a general template for creating a new [Kestra](https://github.com/kestra-io/kestra) plugin. It should take only a few minutes! Use this repository as a scaffold to ensure that you've set up the plugin correctly, including unit tests and CI/CD workflows.
-
-![Kestra orchestrator](https://kestra.io/video.gif)
-
-## Running the project in local
-### Prerequisites
-- Java 21
-- Docker
-
-### Running tests
-```
-./gradlew check --parallel
-```
-
-### Development
-
-`VSCode`:
-
-Follow the README.md within the `.devcontainer` folder for a quick and easy way to get up and running with developing plugins if you are using VSCode.
-
-`Other IDEs`:
-
-```
-./gradlew shadowJar && docker build -t kestra-custom . && docker run --rm -p 8080:8080 kestra-custom server local
-```
-> [!NOTE]
-> You need to relaunch this whole command everytime you make a change to your plugin
-
-go to http://localhost:8080, your plugin will be available to use
-
-## Documentation
-* Full documentation can be found under: [kestra.io/docs](https://kestra.io/docs)
-* Documentation for developing a plugin is included in the [Plugin Developer Guide](https://kestra.io/docs/plugin-developer-guide/)
-
-## Map Task Example
+## Examples
+Map with casting and error handling:
 ```yaml
 - id: normalize
   type: io.kestra.plugin.transform.Map
@@ -97,69 +41,38 @@ go to http://localhost:8080, your plugin will be available to use
     onError: SKIP
 ```
 
-Output mode defaults to `AUTO`:
-- If `from` resolves to a storage URI, the task stores the transformed records as Ion and emits `outputs.uri`.
-- Otherwise it emits `outputs.records` (JSON-safe values).
-
-To force a mode, set `output: RECORDS` or `output: STORE`.
-
-You can omit `type` to keep the inferred value, and you can use shorthand for `expr`:
+Unnest + Filter + Map:
 ```yaml
-  fields:
-    customer_id: user.id
-    active_raw:
-      expr: active
-```
+- id: explode_items
+  type: io.kestra.plugin.transform.Unnest
+  from: "{{ outputs.fetch.records }}"
+  path: items[]
+  as: item
 
-Example: read from stored Ion and keep records in outputs
-```yaml
-- id: map_from_storage_records
+- id: expensive_items
+  type: io.kestra.plugin.transform.Filter
+  from: "{{ outputs.explode_items.records }}"
+  where: item.price > 10
+
+- id: project
   type: io.kestra.plugin.transform.Map
-  from: "{{ outputs.query1.uri }}"
-  output: RECORDS
-
+  from: "{{ outputs.expensive_items.records }}"
   fields:
-    ts:
-      expr: ts
-      type: TIMESTAMP
+    customer_id: customer_id
+    sku: item.sku
+    price:
+      expr: item.price
+      type: DECIMAL
 ```
 
-Example: read from records and store output Ion file
-```yaml
-- id: map_to_storage
-  type: io.kestra.plugin.transform.Map
-  from: "{{ outputs.query1.records }}"
-  output: STORE
-
-  fields:
-    value:
-      expr: value
-      type: INT
-```
-
-Example: download JSON and transform
-```yaml
-- id: map_http_download
-  type: io.kestra.plugin.transform.Map
-  from: "{{ outputs.download.uri }}"
-  output: RECORDS
-
-  fields:
-    first_title:
-      expr: products[0].title
-      type: STRING
-```
-
-Example: aggregate totals by customer
+Aggregate totals:
 ```yaml
 - id: totals
   type: io.kestra.plugin.transform.Aggregate
   from: "{{ outputs.normalize.records }}"
-
   groupBy:
     - customer_id
     - country
-
   aggregates:
     order_count:
       expr: count()
@@ -170,18 +83,38 @@ Example: aggregate totals by customer
     last_order_at:
       expr: max(created_at)
       type: TIMESTAMP
-
   options:
     onError: FAIL
 ```
 
+More flows live in `examples/`.
 
-## License
-Apache 2.0 © [Kestra Technologies](https://kestra.io)
+## Development
+Prerequisites:
+- Java 21
+- Docker
 
+Run tests:
+```sh
+./gradlew test
+```
 
-## Stay up to date
+Run Kestra locally with the plugin:
+```sh
+./gradlew shadowJar && docker build -t kestra-custom . && docker run --rm -p 8080:8080 kestra-custom server local
+```
 
-We release new versions every month. Give the [main repository](https://github.com/kestra-io/kestra) a star to stay up to date with the latest releases and get notified about future updates.
+## Benchmarks
+Opt-in benchmarks live in `src/test/java/io/kestra/plugin/transform/BenchTest.java`.
 
-![Star the repo](https://kestra.io/star.gif)
+Examples:
+```sh
+./gradlew test --tests io.kestra.plugin.transform.BenchTest -Dbench=true -Dbench.records=10000,100000 -Dbench.format=text
+./gradlew test --tests io.kestra.plugin.transform.BenchTest -Dbench=true -Dbench.records=10000,100000 -Dbench.format=binary
+```
+
+Reports are written to `build/bench/report.md`.
+
+## Documentation
+Kestra docs: https://kestra.io/docs  
+Plugin developer guide: https://kestra.io/docs/plugin-developer-guide
