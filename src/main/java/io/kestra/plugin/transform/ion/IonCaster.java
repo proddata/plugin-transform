@@ -1,4 +1,4 @@
-package io.kestra.plugin.transform;
+package io.kestra.plugin.transform.ion;
 
 import com.amazon.ion.IonValue;
 

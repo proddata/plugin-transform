@@ -1,4 +1,4 @@
-package io.kestra.plugin.transform;
+package io.kestra.plugin.transform.ion;
 
 public enum IonTypeName {
     STRING,

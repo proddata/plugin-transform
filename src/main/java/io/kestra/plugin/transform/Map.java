@@ -3,6 +3,7 @@ package io.kestra.plugin.transform;
 import com.amazon.ion.IonList;
 import com.amazon.ion.IonStruct;
 import com.amazon.ion.IonValue;
+import com.amazon.ion.IonWriter;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import io.kestra.core.models.annotations.Plugin;
 import io.kestra.core.models.property.Property;
@@ -10,6 +11,15 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextProperty;
+import io.kestra.plugin.transform.engine.DefaultRecordTransformer;
+import io.kestra.plugin.transform.engine.DefaultTransformTaskEngine;
+import io.kestra.plugin.transform.engine.FieldMapping;
+import io.kestra.plugin.transform.engine.TransformResult;
+import io.kestra.plugin.transform.engine.TransformStats;
+import io.kestra.plugin.transform.expression.DefaultExpressionEngine;
+import io.kestra.plugin.transform.ion.DefaultIonCaster;
+import io.kestra.plugin.transform.ion.IonTypeName;
+import io.kestra.plugin.transform.ion.IonValueUtils;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -19,10 +29,16 @@ import lombok.NoArgsConstructor;
 import lombok.ToString;
 import lombok.experimental.SuperBuilder;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.UUID;
 
 @SuperBuilder
 @ToString
@@ -53,13 +69,58 @@ import java.util.Objects;
                 "  dropNulls: true",
                 "  onError: SKIP"
             }
+        ),
+        @io.kestra.core.models.annotations.Example(
+            title = "Map DuckDB stored results",
+            full = true,
+            code = """
+                id: map_duckdb_stored
+                namespace: company.team
+
+                tasks:
+                  - id: query1
+                    type: io.kestra.plugin.jdbc.duckdb.Query
+                    sql: SELECT now() as "ts";
+                    fetchType: STORE
+
+                  - id: map
+                    type: io.kestra.plugin.transform.Map
+                    from: "{{ outputs.query1.uri }}"
+                    output: RECORDS
+                    fields:
+                      ts:
+                        expr: ts
+                        type: TIMESTAMP
+                """
+        ),
+        @io.kestra.core.models.annotations.Example(
+            title = "Map direct output values",
+            full = true,
+            code = """
+                id: map_direct_outputs
+                namespace: company.team
+
+                tasks:
+                  - id: query1
+                    type: io.kestra.plugin.jdbc.duckdb.Query
+                    sql: SELECT 1 as "value" UNION ALL SELECT 2 as "value";
+                    fetchType: FETCH
+
+                  - id: map
+                    type: io.kestra.plugin.transform.Map
+                    from: "{{ outputs.query1.records }}"
+                    fields:
+                      value:
+                        expr: value
+                        type: INT
+                """
         )
     }
 )
 public class Map extends Task implements RunnableTask<Map.Output> {
     @Schema(
         title = "Input records",
-        description = "Ion list or struct to transform."
+        description = "Ion list or struct to transform, or a storage URI pointing to an Ion file."
     )
     private Property<Object> from;
 
@@ -76,10 +137,17 @@ public class Map extends Task implements RunnableTask<Map.Output> {
     @Builder.Default
     private Options options = new Options();
 
+    @Schema(
+        title = "Output mode",
+        description = "AUTO stores to internal storage when the input is a storage URI; otherwise it returns records."
+    )
+    @Builder.Default
+    private OutputMode output = OutputMode.AUTO;
+
     @Override
     public Output run(RunContext runContext) throws Exception {
-        Object rendered = resolveInput(runContext);
-        List<IonStruct> records = normalizeRecords(rendered);
+        ResolvedInput resolvedInput = resolveInput(runContext);
+        List<IonStruct> records = normalizeRecords(resolvedInput.value());
 
         List<FieldMapping> mappings = new ArrayList<>();
         if (fields != null) {
@@ -106,6 +174,18 @@ public class Map extends Task implements RunnableTask<Map.Output> {
         );
         DefaultTransformTaskEngine engine = new DefaultTransformTaskEngine(transformer);
         TransformResult result = engine.execute(records);
+
+        OutputMode effectiveOutput = output == OutputMode.AUTO
+            ? (resolvedInput.fromStorage() ? OutputMode.STORE : OutputMode.RECORDS)
+            : output;
+
+        if (effectiveOutput == OutputMode.STORE) {
+            URI storedUri = storeRecords(runContext, result.records());
+            return Output.builder()
+                .uri(storedUri.toString())
+                .stats(result.stats())
+                .build();
+        }
 
         List<Object> renderedRecords = new ArrayList<>();
         for (IonStruct record : result.records()) {
@@ -145,42 +225,125 @@ public class Map extends Task implements RunnableTask<Map.Output> {
             IonStruct struct = asStruct(IonValueUtils.toIonValue(map));
             return List.of(struct);
         }
-        throw new TransformException("Unsupported input type: " + rendered.getClass().getName());
+        throw new TransformException("Unsupported input type: " + rendered.getClass().getName()
+            + ". The 'from' property must resolve to a list/map of records, Ion values, or a storage URI.");
     }
 
-    private Object resolveInput(RunContext runContext) throws io.kestra.core.exceptions.IllegalVariableEvaluationException {
+    private URI storeRecords(RunContext runContext, List<IonStruct> records) throws TransformException {
+        String name = "transform-" + UUID.randomUUID() + ".ion";
+        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+             IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+            for (IonStruct record : records) {
+                if (record == null) {
+                    writer.writeNull();
+                } else {
+                    record.writeTo(writer);
+                }
+            }
+            writer.finish();
+            return runContext.storage().putFile(
+                new ByteArrayInputStream(outputStream.toByteArray()),
+                name
+            );
+        } catch (IOException e) {
+            throw new TransformException("Unable to store transformed records", e);
+        }
+    }
+
+    private ResolvedInput resolveInput(RunContext runContext) throws Exception {
         if (from == null) {
-            return null;
+            return new ResolvedInput(null, false);
         }
 
         String expression = from.toString();
         if (expression != null && expression.contains("{{") && expression.contains("}}")) {
             Object typed = runContext.renderTyped(expression);
             if (typed != null && !(typed instanceof String)) {
-                return typed;
+                ResolvedInput resolved = resolveStorageCandidate(runContext, typed);
+                if (resolved != null) {
+                    return resolved;
+                }
+                return new ResolvedInput(typed, false);
             }
         }
 
         RunContextProperty<Object> rendered = runContext.render(from);
         Object value = rendered.as(Object.class).orElse(null);
+        ResolvedInput resolved = resolveStorageCandidate(runContext, value);
+        if (resolved != null) {
+            return resolved;
+        }
         if (!(value instanceof String)) {
-            return value;
+            return new ResolvedInput(value, false);
         }
         try {
             Object listValue = rendered.asList(Object.class);
             if (listValue instanceof List) {
-                return listValue;
+                return new ResolvedInput(listValue, false);
             }
         } catch (io.kestra.core.exceptions.IllegalVariableEvaluationException ignored) {
         }
         try {
             Object mapValue = rendered.asMap(String.class, Object.class);
             if (mapValue instanceof java.util.Map) {
-                return mapValue;
+                return new ResolvedInput(mapValue, false);
             }
         } catch (io.kestra.core.exceptions.IllegalVariableEvaluationException ignored) {
         }
-        return value;
+        return new ResolvedInput(value, false);
+    }
+
+    private ResolvedInput resolveStorageCandidate(RunContext runContext, Object value) throws TransformException {
+        if (value instanceof URI uriValue) {
+            if (uriValue.getScheme() == null) {
+                return new ResolvedInput(value, false);
+            }
+            if (!runContext.storage().isFileExist(uriValue)) {
+                throw new TransformException("Storage file not found for URI: " + uriValue);
+            }
+            return new ResolvedInput(loadIonFromStorage(runContext, uriValue), true);
+        }
+        if (value instanceof String stringValue) {
+            URI uri;
+            try {
+                uri = URI.create(stringValue);
+            } catch (IllegalArgumentException e) {
+                return null;
+            }
+            if (uri.getScheme() == null) {
+                return null;
+            }
+            if (!runContext.storage().isFileExist(uri)) {
+                throw new TransformException("Storage file not found for URI: " + uri);
+            }
+            return new ResolvedInput(loadIonFromStorage(runContext, uri), true);
+        }
+        return null;
+    }
+
+    private Object loadIonFromStorage(RunContext runContext, URI uri) throws TransformException {
+        try (InputStream inputStream = runContext.storage().getFile(uri)) {
+            IonList list = IonValueUtils.system().newEmptyList();
+            for (IonValue value : IonValueUtils.system().getLoader().load(inputStream)) {
+                list.add(IonValueUtils.cloneValue(value));
+            }
+            return unwrapIonList(list);
+        } catch (IOException e) {
+            throw new TransformException("Unable to read Ion file from storage: " + uri, e);
+        }
+    }
+
+    private Object unwrapIonList(IonList list) {
+        if (list == null || list.isEmpty()) {
+            return List.of();
+        }
+        if (list.size() == 1) {
+            IonValue value = list.get(0);
+            if (value instanceof IonStruct || value instanceof IonList) {
+                return value;
+            }
+        }
+        return list;
     }
 
     private IonStruct asStruct(IonValue value) throws TransformException {
@@ -257,9 +420,24 @@ public class Map extends Task implements RunnableTask<Map.Output> {
         }
     }
 
+    public enum OutputMode {
+        AUTO,
+        RECORDS,
+        STORE
+    }
+
+    private record ResolvedInput(Object value, boolean fromStorage) {
+    }
+
     @Builder
     @Getter
     public static class Output implements io.kestra.core.models.tasks.Output {
+        @Schema(
+            title = "Stored Ion file URI",
+            description = "URI to the stored Ion file when output mode is STORE or AUTO resolves to STORE."
+        )
+        private final String uri;
+
         private final List<Object> records;
         private final TransformStats stats;
     }

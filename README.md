@@ -97,12 +97,44 @@ go to http://localhost:8080, your plugin will be available to use
     onError: SKIP
 ```
 
+Output mode defaults to `AUTO`:
+- If `from` resolves to a storage URI, the task stores the transformed records as Ion and emits `outputs.uri`.
+- Otherwise it emits `outputs.records` (JSON-safe values).
+
+To force a mode, set `output: RECORDS` or `output: STORE`.
+
 You can omit `type` to keep the inferred value, and you can use shorthand for `expr`:
 ```yaml
   fields:
     customer_id: user.id
     active_raw:
       expr: active
+```
+
+Example: read from stored Ion and keep records in outputs
+```yaml
+- id: map_from_storage_records
+  type: io.kestra.plugin.transform.Map
+  from: "{{ outputs.query1.uri }}"
+  output: RECORDS
+
+  fields:
+    ts:
+      expr: ts
+      type: TIMESTAMP
+```
+
+Example: read from records and store output Ion file
+```yaml
+- id: map_to_storage
+  type: io.kestra.plugin.transform.Map
+  from: "{{ outputs.query1.records }}"
+  output: STORE
+
+  fields:
+    value:
+      expr: value
+      type: INT
 ```
 
 

@@ -1,4 +1,4 @@
-package io.kestra.plugin.transform;
+package io.kestra.plugin.transform.ion;
 
 import com.amazon.ion.IonList;
 import com.amazon.ion.IonStruct;
@@ -8,7 +8,7 @@ import com.amazon.ion.Timestamp;
 import java.math.BigDecimal;
 import java.time.Instant;
 
-final class DefaultIonCaster implements IonCaster {
+public final class DefaultIonCaster implements IonCaster {
     @Override
     public IonValue cast(IonValue value, IonTypeName targetType) throws CastException {
         if (IonValueUtils.isNull(value)) {

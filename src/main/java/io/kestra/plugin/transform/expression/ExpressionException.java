@@ -1,4 +1,4 @@
-package io.kestra.plugin.transform;
+package io.kestra.plugin.transform.expression;
 
 public class ExpressionException extends Exception {
     public ExpressionException(String message) {

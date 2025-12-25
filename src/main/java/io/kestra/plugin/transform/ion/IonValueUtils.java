@@ -1,4 +1,4 @@
-package io.kestra.plugin.transform;
+package io.kestra.plugin.transform.ion;
 
 import com.amazon.ion.IonBool;
 import com.amazon.ion.IonDecimal;
@@ -20,25 +20,25 @@ import java.time.ZonedDateTime;
 import java.util.Date;
 import java.util.List;
 
-final class IonValueUtils {
+public final class IonValueUtils {
     private static final IonSystem SYSTEM = IonSystemBuilder.standard().build();
 
     private IonValueUtils() {
     }
 
-    static IonSystem system() {
+    public static IonSystem system() {
         return SYSTEM;
     }
 
-    static boolean isNull(IonValue value) {
+    public static boolean isNull(IonValue value) {
         return value == null || value.isNullValue();
     }
 
-    static IonValue nullValue() {
+    public static IonValue nullValue() {
         return SYSTEM.newNull();
     }
 
-    static IonValue cloneValue(IonValue value) {
+    public static IonValue cloneValue(IonValue value) {
         if (value == null) {
             return null;
         }
@@ -49,7 +49,7 @@ final class IonValueUtils {
         }
     }
 
-    static IonValue toIonValue(Object value) {
+    public static IonValue toIonValue(Object value) {
         if (value == null) {
             return null;
         }
@@ -103,7 +103,7 @@ final class IonValueUtils {
         return SYSTEM.newString(String.valueOf(value));
     }
 
-    static BigDecimal asDecimal(IonValue value) throws CastException {
+    public static BigDecimal asDecimal(IonValue value) throws CastException {
         if (isNull(value)) {
             return null;
         }
@@ -126,7 +126,7 @@ final class IonValueUtils {
         throw new CastException("Expected numeric value, got " + value.getType());
     }
 
-    static String asString(IonValue value) {
+    public static String asString(IonValue value) {
         if (isNull(value)) {
             return null;
         }
@@ -136,7 +136,7 @@ final class IonValueUtils {
         return value.toString();
     }
 
-    static Boolean asBoolean(IonValue value) throws CastException {
+    public static Boolean asBoolean(IonValue value) throws CastException {
         if (isNull(value)) {
             return null;
         }
@@ -155,7 +155,7 @@ final class IonValueUtils {
         throw new CastException("Expected boolean value, got " + value.getType());
     }
 
-    static Instant asInstant(IonValue value) throws CastException {
+    public static Instant asInstant(IonValue value) throws CastException {
         if (isNull(value)) {
             return null;
         }
@@ -172,7 +172,7 @@ final class IonValueUtils {
         throw new CastException("Expected timestamp value, got " + value.getType());
     }
 
-    static Object toJavaValue(IonValue value) {
+    public static Object toJavaValue(IonValue value) {
         if (isNull(value)) {
             return null;
         }

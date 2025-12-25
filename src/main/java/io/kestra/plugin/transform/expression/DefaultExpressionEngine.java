@@ -1,10 +1,12 @@
-package io.kestra.plugin.transform;
+package io.kestra.plugin.transform.expression;
 
 import com.amazon.ion.IonList;
 import com.amazon.ion.IonString;
 import com.amazon.ion.IonStruct;
 import com.amazon.ion.IonValue;
 import com.amazon.ion.Timestamp;
+import io.kestra.plugin.transform.ion.CastException;
+import io.kestra.plugin.transform.ion.IonValueUtils;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -13,7 +15,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 
-final class DefaultExpressionEngine implements ExpressionEngine {
+public final class DefaultExpressionEngine implements ExpressionEngine {
     private final java.util.Map<String, Expr> cache = new ConcurrentHashMap<>();
 
     @Override

@@ -1,15 +1,16 @@
-package io.kestra.plugin.transform;
+package io.kestra.plugin.transform.engine;
 
 import com.amazon.ion.IonStruct;
+import io.kestra.plugin.transform.TransformException;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
-final class DefaultTransformTaskEngine implements TransformTaskEngine {
+public final class DefaultTransformTaskEngine implements TransformTaskEngine {
     private final DefaultRecordTransformer transformer;
 
-    DefaultTransformTaskEngine(DefaultRecordTransformer transformer) {
+    public DefaultTransformTaskEngine(DefaultRecordTransformer transformer) {
         this.transformer = transformer;
     }
 

@@ -1,22 +1,29 @@
-package io.kestra.plugin.transform;
+package io.kestra.plugin.transform.engine;
 
 import com.amazon.ion.IonStruct;
 import com.amazon.ion.IonValue;
+import io.kestra.plugin.transform.TransformException;
+import io.kestra.plugin.transform.TransformOptions;
+import io.kestra.plugin.transform.expression.ExpressionEngine;
+import io.kestra.plugin.transform.expression.ExpressionException;
+import io.kestra.plugin.transform.ion.CastException;
+import io.kestra.plugin.transform.ion.IonCaster;
+import io.kestra.plugin.transform.ion.IonValueUtils;
 
 import java.util.HashMap;
 import java.util.List;
 
-final class DefaultRecordTransformer implements RecordTransformer {
+public final class DefaultRecordTransformer implements RecordTransformer {
     private final List<FieldMapping> mappings;
     private final java.util.Map<String, FieldMapping> mappingByTarget;
     private final ExpressionEngine expressionEngine;
     private final IonCaster caster;
     private final TransformOptions options;
 
-    DefaultRecordTransformer(List<FieldMapping> mappings,
-                             ExpressionEngine expressionEngine,
-                             IonCaster caster,
-                             TransformOptions options) {
+    public DefaultRecordTransformer(List<FieldMapping> mappings,
+                                    ExpressionEngine expressionEngine,
+                                    IonCaster caster,
+                                    TransformOptions options) {
         this.mappings = mappings;
         this.expressionEngine = expressionEngine;
         this.caster = caster;
