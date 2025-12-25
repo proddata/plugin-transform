@@ -25,12 +25,12 @@ import lombok.NoArgsConstructor;
 import lombok.ToString;
 import lombok.experimental.SuperBuilder;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -101,7 +101,6 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
     @Override
     public Output run(RunContext runContext) throws Exception {
         ResolvedInput resolvedInput = resolveInput(runContext);
-        List<IonStruct> records = normalizeRecords(resolvedInput.value());
 
         String pathExpr = runContext.render(path).as(String.class).orElse(null);
         if (pathExpr == null || pathExpr.isBlank()) {
@@ -119,6 +118,24 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
             ? (resolvedInput.fromStorage() ? OutputMode.STORE : OutputMode.RECORDS)
             : output;
 
+        if (resolvedInput.fromStorage() && effectiveOutput == OutputMode.STORE) {
+            URI storedUri = unnestStreamToStorage(
+                runContext,
+                resolvedInput.storageUri(),
+                pathExpr,
+                asField,
+                expressionEngine,
+                stats
+            );
+            runContext.metric(Counter.of("processed", stats.processed))
+                .metric(Counter.of("failed", stats.failed))
+                .metric(Counter.of("dropped", stats.dropped));
+            return Output.builder()
+                .uri(storedUri.toString())
+                .build();
+        }
+
+        List<IonStruct> records = normalizeRecords(resolveInMemory(runContext, resolvedInput));
         if (effectiveOutput == OutputMode.STORE) {
             URI storedUri = storeRecords(
                 runContext,
@@ -143,6 +160,13 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
         return Output.builder()
             .records(rendered)
             .build();
+    }
+
+    private Object resolveInMemory(RunContext runContext, ResolvedInput resolvedInput) throws TransformException {
+        if (!resolvedInput.fromStorage()) {
+            return resolvedInput.value();
+        }
+        return loadIonFromStorage(runContext, resolvedInput.storageUri());
     }
 
     private List<Object> expandToRecords(List<IonStruct> records,
@@ -194,49 +218,137 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                              DefaultExpressionEngine expressionEngine,
                              StatsAccumulator stats) throws TransformException {
         String name = "unnest-" + UUID.randomUUID() + ".ion";
-        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-             IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
-            for (int i = 0; i < records.size(); i++) {
-                IonStruct record = records.get(i);
-                stats.processed++;
-                try {
-                    IonValue evaluated = expressionEngine.evaluate(pathExpr, record);
-                    if (IonValueUtils.isNull(evaluated)) {
-                        continue;
-                    }
-                    if (!(evaluated instanceof IonList list)) {
-                        throw new TransformException("Expected list at path: " + pathExpr);
-                    }
-                    if (list.isEmpty()) {
-                        continue;
-                    }
-                    for (IonValue element : list) {
-                        IonStruct output = buildOutputRecord(record, asField, element, options.keepUnknownFields);
-                        output.writeTo(writer);
-                    }
-                } catch (ExpressionException | TransformException e) {
-                    stats.fail(i, "path", e.getMessage());
-                    if (options.onError == TransformOptions.OnErrorMode.FAIL) {
-                        throw new TransformException(e.getMessage(), e);
-                    }
-                    if (options.onError == TransformOptions.OnErrorMode.SKIP) {
-                        stats.dropped++;
-                        continue;
-                    }
-                    if (options.onError == TransformOptions.OnErrorMode.NULL) {
-                        IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepUnknownFields);
-                        output.writeTo(writer);
+        try {
+            java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
+            try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
+                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                for (int i = 0; i < records.size(); i++) {
+                    IonStruct record = records.get(i);
+                    stats.processed++;
+                    try {
+                        IonValue evaluated = expressionEngine.evaluate(pathExpr, record);
+                        if (IonValueUtils.isNull(evaluated)) {
+                            continue;
+                        }
+                        if (!(evaluated instanceof IonList list)) {
+                            throw new TransformException("Expected list at path: " + pathExpr);
+                        }
+                        if (list.isEmpty()) {
+                            continue;
+                        }
+                        for (IonValue element : list) {
+                            IonStruct output = buildOutputRecord(record, asField, element, options.keepUnknownFields);
+                            output.writeTo(writer);
+                            writer.flush();
+                            outputStream.write('\n');
+                        }
+                    } catch (ExpressionException | TransformException e) {
+                        stats.fail(i, "path", e.getMessage());
+                        if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+                            throw new TransformException(e.getMessage(), e);
+                        }
+                        if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+                            stats.dropped++;
+                            continue;
+                        }
+                        if (options.onError == TransformOptions.OnErrorMode.NULL) {
+                            IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepUnknownFields);
+                            output.writeTo(writer);
+                            writer.flush();
+                            outputStream.write('\n');
+                        }
                     }
                 }
+                writer.finish();
             }
-            writer.finish();
-            return runContext.storage().putFile(
-                new ByteArrayInputStream(outputStream.toByteArray()),
-                name
-            );
+            return runContext.storage().putFile(outputPath.toFile(), name);
         } catch (IOException e) {
             throw new TransformException("Unable to store unnested records", e);
         }
+    }
+
+    private URI unnestStreamToStorage(RunContext runContext,
+                                      URI uri,
+                                      String pathExpr,
+                                      String asField,
+                                      DefaultExpressionEngine expressionEngine,
+                                      StatsAccumulator stats) throws TransformException {
+        String name = "unnest-" + UUID.randomUUID() + ".ion";
+        InputStream inputStream;
+        try {
+            inputStream = runContext.storage().getFile(uri);
+        } catch (IOException e) {
+            throw new TransformException("Unable to read Ion file from storage: " + uri, e);
+        }
+
+        try (InputStream stream = inputStream) {
+            java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
+            try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
+                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                Iterator<IonValue> iterator = IonValueUtils.system().iterate(stream);
+                int index = 0;
+                while (iterator.hasNext()) {
+                    IonValue value = iterator.next();
+                    if (value instanceof IonList list) {
+                        for (IonValue element : list) {
+                            index = processStreamRecord(element, index, pathExpr, asField, expressionEngine, stats, writer, outputStream);
+                        }
+                    } else {
+                        index = processStreamRecord(value, index, pathExpr, asField, expressionEngine, stats, writer, outputStream);
+                    }
+                }
+                writer.finish();
+            }
+            return runContext.storage().putFile(outputPath.toFile(), name);
+        } catch (IOException e) {
+            throw new TransformException("Unable to store unnested records", e);
+        }
+    }
+
+    private int processStreamRecord(IonValue value,
+                                    int index,
+                                    String pathExpr,
+                                    String asField,
+                                    DefaultExpressionEngine expressionEngine,
+                                    StatsAccumulator stats,
+                                    IonWriter writer,
+                                    OutputStream outputStream) throws TransformException, IOException {
+        IonStruct record = asStruct(value);
+        stats.processed++;
+        try {
+            IonValue evaluated = expressionEngine.evaluate(pathExpr, record);
+            if (IonValueUtils.isNull(evaluated)) {
+                return index + 1;
+            }
+            if (!(evaluated instanceof IonList list)) {
+                throw new TransformException("Expected list at path: " + pathExpr);
+            }
+            if (list.isEmpty()) {
+                return index + 1;
+            }
+            for (IonValue element : list) {
+                IonStruct output = buildOutputRecord(record, asField, element, options.keepUnknownFields);
+                output.writeTo(writer);
+                writer.flush();
+                outputStream.write('\n');
+            }
+        } catch (ExpressionException | TransformException e) {
+            stats.fail(index, "path", e.getMessage());
+            if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+                throw new TransformException(e.getMessage(), e);
+            }
+            if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+                stats.dropped++;
+                return index + 1;
+            }
+            if (options.onError == TransformOptions.OnErrorMode.NULL) {
+                IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepUnknownFields);
+                output.writeTo(writer);
+                writer.flush();
+                outputStream.write('\n');
+            }
+        }
+        return index + 1;
     }
 
     private IonStruct buildOutputRecord(IonStruct input, String asField, IonValue element, boolean keepUnknownFields) {
@@ -299,7 +411,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
 
     private ResolvedInput resolveInput(RunContext runContext) throws Exception {
         if (from == null) {
-            return new ResolvedInput(null, false);
+            return new ResolvedInput(null, false, null);
         }
 
         String expression = from.toString();
@@ -310,7 +422,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                 if (resolved != null) {
                     return resolved;
                 }
-                return new ResolvedInput(typed, false);
+                return new ResolvedInput(typed, false, null);
             }
         }
 
@@ -321,34 +433,31 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
             return resolved;
         }
         if (!(value instanceof String)) {
-            return new ResolvedInput(value, false);
+            return new ResolvedInput(value, false, null);
         }
         try {
             Object listValue = rendered.asList(Object.class);
             if (listValue instanceof List) {
-                return new ResolvedInput(listValue, false);
+                return new ResolvedInput(listValue, false, null);
             }
         } catch (io.kestra.core.exceptions.IllegalVariableEvaluationException ignored) {
         }
         try {
             Object mapValue = rendered.asMap(String.class, Object.class);
             if (mapValue instanceof Map) {
-                return new ResolvedInput(mapValue, false);
+                return new ResolvedInput(mapValue, false, null);
             }
         } catch (io.kestra.core.exceptions.IllegalVariableEvaluationException ignored) {
         }
-        return new ResolvedInput(value, false);
+        return new ResolvedInput(value, false, null);
     }
 
     private ResolvedInput resolveStorageCandidate(RunContext runContext, Object value) throws TransformException {
         if (value instanceof URI uriValue) {
             if (uriValue.getScheme() == null) {
-                return new ResolvedInput(value, false);
+                return new ResolvedInput(value, false, null);
             }
-            if (!runContext.storage().isFileExist(uriValue)) {
-                throw new TransformException("Storage file not found for URI: " + uriValue);
-            }
-            return new ResolvedInput(loadIonFromStorage(runContext, uriValue), true);
+            return new ResolvedInput(uriValue, true, uriValue);
         }
         if (value instanceof String stringValue) {
             URI uri;
@@ -360,10 +469,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
             if (uri.getScheme() == null) {
                 return null;
             }
-            if (!runContext.storage().isFileExist(uri)) {
-                throw new TransformException("Storage file not found for URI: " + uri);
-            }
-            return new ResolvedInput(loadIonFromStorage(runContext, uri), true);
+            return new ResolvedInput(uri, true, uri);
         }
         return null;
     }
@@ -371,8 +477,9 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
     private Object loadIonFromStorage(RunContext runContext, URI uri) throws TransformException {
         try (InputStream inputStream = runContext.storage().getFile(uri)) {
             IonList list = IonValueUtils.system().newEmptyList();
-            for (IonValue value : IonValueUtils.system().getLoader().load(inputStream)) {
-                list.add(IonValueUtils.cloneValue(value));
+            Iterator<IonValue> iterator = IonValueUtils.system().iterate(inputStream);
+            while (iterator.hasNext()) {
+                list.add(IonValueUtils.cloneValue(iterator.next()));
             }
             return unwrapIonList(list);
         } catch (IOException e) {
@@ -420,7 +527,7 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
         STORE
     }
 
-    private record ResolvedInput(Object value, boolean fromStorage) {
+    private record ResolvedInput(Object value, boolean fromStorage, URI storageUri) {
     }
 
     @Builder

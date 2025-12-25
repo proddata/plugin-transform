@@ -28,13 +28,13 @@ import lombok.NoArgsConstructor;
 import lombok.ToString;
 import lombok.experimental.SuperBuilder;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -148,7 +148,6 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
     @Override
     public Output run(RunContext runContext) throws Exception {
         ResolvedInput resolvedInput = resolveInput(runContext);
-        List<IonStruct> records = normalizeRecords(resolvedInput.value());
 
         List<String> groupByFields = runContext.render(groupBy).asList(String.class);
         if (groupByFields == null || groupByFields.isEmpty()) {
@@ -176,10 +175,11 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
         StatsAccumulator stats = new StatsAccumulator();
 
         Map<GroupKey, GroupBucket> grouped = new LinkedHashMap<>();
-        for (IonStruct record : records) {
-            stats.processed++;
-            GroupKey key = buildGroupKey(record, groupByFields);
-            grouped.computeIfAbsent(key, k -> new GroupBucket(record, groupByFields)).records.add(record);
+        if (resolvedInput.fromStorage()) {
+            groupFromStorage(runContext, resolvedInput.storageUri(), groupByFields, grouped, stats);
+        } else {
+            List<IonStruct> records = normalizeRecords(resolvedInput.value());
+            groupRecords(records, groupByFields, grouped, stats);
         }
 
         OutputMode effectiveOutput = output == OutputMode.AUTO
@@ -221,6 +221,49 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
         return outputRecords;
     }
 
+    private void groupRecords(List<IonStruct> records,
+                              List<String> groupByFields,
+                              Map<GroupKey, GroupBucket> grouped,
+                              StatsAccumulator stats) throws TransformException {
+        for (IonStruct record : records) {
+            stats.processed++;
+            GroupKey key = buildGroupKey(record, groupByFields);
+            grouped.computeIfAbsent(key, k -> new GroupBucket(record, groupByFields)).records.add(record);
+        }
+    }
+
+    private void groupFromStorage(RunContext runContext,
+                                  URI uri,
+                                  List<String> groupByFields,
+                                  Map<GroupKey, GroupBucket> grouped,
+                                  StatsAccumulator stats) throws TransformException {
+        try (InputStream inputStream = runContext.storage().getFile(uri)) {
+            Iterator<IonValue> iterator = IonValueUtils.system().iterate(inputStream);
+            while (iterator.hasNext()) {
+                IonValue value = iterator.next();
+                if (value instanceof IonList list) {
+                    for (IonValue element : list) {
+                        groupStreamRecord(element, groupByFields, grouped, stats);
+                    }
+                } else {
+                    groupStreamRecord(value, groupByFields, grouped, stats);
+                }
+            }
+        } catch (IOException e) {
+            throw new TransformException("Unable to read Ion file from storage: " + uri, e);
+        }
+    }
+
+    private void groupStreamRecord(IonValue value,
+                                   List<String> groupByFields,
+                                   Map<GroupKey, GroupBucket> grouped,
+                                   StatsAccumulator stats) throws TransformException {
+        IonStruct record = asStruct(value);
+        stats.processed++;
+        GroupKey key = buildGroupKey(record, groupByFields);
+        grouped.computeIfAbsent(key, k -> new GroupBucket(record, groupByFields)).records.add(record);
+    }
+
     private URI storeRecords(RunContext runContext,
                              Map<GroupKey, GroupBucket> grouped,
                              List<String> groupByFields,
@@ -229,19 +272,21 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
                              DefaultIonCaster caster,
                              StatsAccumulator stats) throws TransformException {
         String name = "aggregate-" + UUID.randomUUID() + ".ion";
-        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-             IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
-            for (GroupBucket bucket : grouped.values()) {
-                IonStruct output = aggregateBucket(bucket, groupByFields, mappings, expressionEngine, caster, stats);
-                if (output != null) {
-                    output.writeTo(writer);
+        try {
+            java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
+            try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
+                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                for (GroupBucket bucket : grouped.values()) {
+                    IonStruct output = aggregateBucket(bucket, groupByFields, mappings, expressionEngine, caster, stats);
+                    if (output != null) {
+                        output.writeTo(writer);
+                        writer.flush();
+                        outputStream.write('\n');
+                    }
                 }
+                writer.finish();
             }
-            writer.finish();
-            return runContext.storage().putFile(
-                new ByteArrayInputStream(outputStream.toByteArray()),
-                name
-            );
+            return runContext.storage().putFile(outputPath.toFile(), name);
         } catch (IOException e) {
             throw new TransformException("Unable to store aggregated records", e);
         }
@@ -471,7 +516,7 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
 
     private ResolvedInput resolveInput(RunContext runContext) throws Exception {
         if (from == null) {
-            return new ResolvedInput(null, false);
+            return new ResolvedInput(null, false, null);
         }
 
         String expression = from.toString();
@@ -482,7 +527,7 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
                 if (resolved != null) {
                     return resolved;
                 }
-                return new ResolvedInput(typed, false);
+                return new ResolvedInput(typed, false, null);
             }
         }
 
@@ -493,34 +538,31 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             return resolved;
         }
         if (!(value instanceof String)) {
-            return new ResolvedInput(value, false);
+            return new ResolvedInput(value, false, null);
         }
         try {
             Object listValue = rendered.asList(Object.class);
             if (listValue instanceof List) {
-                return new ResolvedInput(listValue, false);
+                return new ResolvedInput(listValue, false, null);
             }
         } catch (io.kestra.core.exceptions.IllegalVariableEvaluationException ignored) {
         }
         try {
             Object mapValue = rendered.asMap(String.class, Object.class);
             if (mapValue instanceof Map) {
-                return new ResolvedInput(mapValue, false);
+                return new ResolvedInput(mapValue, false, null);
             }
         } catch (io.kestra.core.exceptions.IllegalVariableEvaluationException ignored) {
         }
-        return new ResolvedInput(value, false);
+        return new ResolvedInput(value, false, null);
     }
 
     private ResolvedInput resolveStorageCandidate(RunContext runContext, Object value) throws TransformException {
         if (value instanceof URI uriValue) {
             if (uriValue.getScheme() == null) {
-                return new ResolvedInput(value, false);
+                return new ResolvedInput(value, false, null);
             }
-            if (!runContext.storage().isFileExist(uriValue)) {
-                throw new TransformException("Storage file not found for URI: " + uriValue);
-            }
-            return new ResolvedInput(loadIonFromStorage(runContext, uriValue), true);
+            return new ResolvedInput(uriValue, true, uriValue);
         }
         if (value instanceof String stringValue) {
             URI uri;
@@ -532,10 +574,7 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             if (uri.getScheme() == null) {
                 return null;
             }
-            if (!runContext.storage().isFileExist(uri)) {
-                throw new TransformException("Storage file not found for URI: " + uri);
-            }
-            return new ResolvedInput(loadIonFromStorage(runContext, uri), true);
+            return new ResolvedInput(uri, true, uri);
         }
         return null;
     }
@@ -543,8 +582,9 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
     private Object loadIonFromStorage(RunContext runContext, URI uri) throws TransformException {
         try (InputStream inputStream = runContext.storage().getFile(uri)) {
             IonList list = IonValueUtils.system().newEmptyList();
-            for (IonValue value : IonValueUtils.system().getLoader().load(inputStream)) {
-                list.add(IonValueUtils.cloneValue(value));
+            Iterator<IonValue> iterator = IonValueUtils.system().iterate(inputStream);
+            while (iterator.hasNext()) {
+                list.add(IonValueUtils.cloneValue(iterator.next()));
             }
             return unwrapIonList(list);
         } catch (IOException e) {
@@ -657,7 +697,7 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
         }
     }
 
-    private record ResolvedInput(Object value, boolean fromStorage) {
+    private record ResolvedInput(Object value, boolean fromStorage, URI storageUri) {
     }
 
     private static final class StatsAccumulator {

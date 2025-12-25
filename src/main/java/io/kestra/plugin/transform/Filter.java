@@ -25,12 +25,12 @@ import lombok.NoArgsConstructor;
 import lombok.ToString;
 import lombok.experimental.SuperBuilder;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -93,7 +93,6 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
     @Override
     public Output run(RunContext runContext) throws Exception {
         ResolvedInput resolvedInput = resolveInput(runContext);
-        List<IonStruct> records = normalizeRecords(resolvedInput.value());
 
         String whereExpr = runContext.render(where).as(String.class).orElse(null);
         if (whereExpr == null || whereExpr.isBlank()) {
@@ -107,6 +106,18 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
             ? (resolvedInput.fromStorage() ? OutputMode.STORE : OutputMode.RECORDS)
             : output;
 
+        if (resolvedInput.fromStorage() && effectiveOutput == OutputMode.STORE) {
+            URI storedUri = filterStreamToStorage(runContext, resolvedInput.storageUri(), whereExpr, expressionEngine, stats);
+            runContext.metric(Counter.of("processed", stats.processed))
+                .metric(Counter.of("passed", stats.passed))
+                .metric(Counter.of("dropped", stats.dropped))
+                .metric(Counter.of("failed", stats.failed));
+            return Output.builder()
+                .uri(storedUri.toString())
+                .build();
+        }
+
+        List<IonStruct> records = normalizeRecords(resolveInMemory(runContext, resolvedInput));
         if (effectiveOutput == OutputMode.STORE) {
             URI storedUri = storeRecords(runContext, records, whereExpr, expressionEngine, stats);
             runContext.metric(Counter.of("processed", stats.processed))
@@ -126,6 +137,13 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
         return Output.builder()
             .records(rendered)
             .build();
+    }
+
+    private Object resolveInMemory(RunContext runContext, ResolvedInput resolvedInput) throws TransformException {
+        if (!resolvedInput.fromStorage()) {
+            return resolvedInput.value();
+        }
+        return loadIonFromStorage(runContext, resolvedInput.storageUri());
     }
 
     private List<Object> filterToRecords(List<IonStruct> records,
@@ -168,41 +186,117 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
                              DefaultExpressionEngine expressionEngine,
                              StatsAccumulator stats) throws TransformException {
         String name = "filter-" + UUID.randomUUID() + ".ion";
-        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-             IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
-            for (int i = 0; i < records.size(); i++) {
-                IonStruct record = records.get(i);
-                stats.processed++;
-                try {
-                    Boolean decision = evaluateBoolean(whereExpr, record, expressionEngine);
-                    if (decision) {
-                        stats.passed++;
-                        record.writeTo(writer);
-                    } else {
-                        stats.dropped++;
-                    }
-                } catch (ExpressionException | TransformException e) {
-                    stats.failed++;
-                    if (options.onError == OnErrorMode.FAIL) {
-                        throw new TransformException(e.getMessage(), e);
-                    }
-                    if (options.onError == OnErrorMode.SKIP) {
-                        stats.dropped++;
-                        continue;
-                    }
-                    if (options.onError == OnErrorMode.KEEP) {
-                        stats.passed++;
-                        record.writeTo(writer);
+        try {
+            java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
+            try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
+                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                for (int i = 0; i < records.size(); i++) {
+                    IonStruct record = records.get(i);
+                    stats.processed++;
+                    try {
+                        Boolean decision = evaluateBoolean(whereExpr, record, expressionEngine);
+                        if (decision) {
+                            stats.passed++;
+                            record.writeTo(writer);
+                            writer.flush();
+                            outputStream.write('\n');
+                        } else {
+                            stats.dropped++;
+                        }
+                    } catch (ExpressionException | TransformException e) {
+                        stats.failed++;
+                        if (options.onError == OnErrorMode.FAIL) {
+                            throw new TransformException(e.getMessage(), e);
+                        }
+                        if (options.onError == OnErrorMode.SKIP) {
+                            stats.dropped++;
+                            continue;
+                        }
+                        if (options.onError == OnErrorMode.KEEP) {
+                            stats.passed++;
+                            record.writeTo(writer);
+                            writer.flush();
+                            outputStream.write('\n');
+                        }
                     }
                 }
+                writer.finish();
             }
-            writer.finish();
-            return runContext.storage().putFile(
-                new ByteArrayInputStream(outputStream.toByteArray()),
-                name
-            );
+            return runContext.storage().putFile(outputPath.toFile(), name);
         } catch (IOException e) {
             throw new TransformException("Unable to store filtered records", e);
+        }
+    }
+
+    private URI filterStreamToStorage(RunContext runContext,
+                                      URI uri,
+                                      String whereExpr,
+                                      DefaultExpressionEngine expressionEngine,
+                                      StatsAccumulator stats) throws TransformException {
+        String name = "filter-" + UUID.randomUUID() + ".ion";
+        InputStream inputStream;
+        try {
+            inputStream = runContext.storage().getFile(uri);
+        } catch (IOException e) {
+            throw new TransformException("Unable to read Ion file from storage: " + uri, e);
+        }
+
+        try (InputStream stream = inputStream) {
+            java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
+            try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
+                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                Iterator<IonValue> iterator = IonValueUtils.system().iterate(stream);
+                while (iterator.hasNext()) {
+                    IonValue value = iterator.next();
+                    if (value instanceof IonList list) {
+                        for (IonValue element : list) {
+                            filterStreamRecord(element, whereExpr, expressionEngine, stats, writer, outputStream);
+                        }
+                    } else {
+                        filterStreamRecord(value, whereExpr, expressionEngine, stats, writer, outputStream);
+                    }
+                }
+                writer.finish();
+            }
+            return runContext.storage().putFile(outputPath.toFile(), name);
+        } catch (IOException e) {
+            throw new TransformException("Unable to store filtered records", e);
+        }
+    }
+
+    private void filterStreamRecord(IonValue value,
+                                    String whereExpr,
+                                    DefaultExpressionEngine expressionEngine,
+                                    StatsAccumulator stats,
+                                    IonWriter writer,
+                                    OutputStream outputStream) throws TransformException, IOException {
+        IonStruct record = asStruct(value);
+        stats.processed++;
+        try {
+            Boolean decision = evaluateBoolean(whereExpr, record, expressionEngine);
+            if (decision) {
+                stats.passed++;
+                record.writeTo(writer);
+                writer.flush();
+                outputStream.write('\n');
+            } else {
+                stats.dropped++;
+            }
+        } catch (ExpressionException | TransformException e) {
+            stats.failed++;
+            if (options.onError == OnErrorMode.FAIL) {
+                throw new TransformException(e.getMessage(), e);
+            }
+            if (options.onError == OnErrorMode.SKIP) {
+                stats.dropped++;
+                return;
+            }
+            if (options.onError == OnErrorMode.KEEP) {
+                stats.passed++;
+                record.writeTo(writer);
+                writer.flush();
+                outputStream.write('\n');
+            }
         }
     }
 
@@ -260,7 +354,7 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
 
     private ResolvedInput resolveInput(RunContext runContext) throws Exception {
         if (from == null) {
-            return new ResolvedInput(null, false);
+            return new ResolvedInput(null, false, null);
         }
 
         String expression = from.toString();
@@ -271,7 +365,7 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
                 if (resolved != null) {
                     return resolved;
                 }
-                return new ResolvedInput(typed, false);
+                return new ResolvedInput(typed, false, null);
             }
         }
 
@@ -282,34 +376,31 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
             return resolved;
         }
         if (!(value instanceof String)) {
-            return new ResolvedInput(value, false);
+            return new ResolvedInput(value, false, null);
         }
         try {
             Object listValue = rendered.asList(Object.class);
             if (listValue instanceof List) {
-                return new ResolvedInput(listValue, false);
+                return new ResolvedInput(listValue, false, null);
             }
         } catch (io.kestra.core.exceptions.IllegalVariableEvaluationException ignored) {
         }
         try {
             Object mapValue = rendered.asMap(String.class, Object.class);
             if (mapValue instanceof Map) {
-                return new ResolvedInput(mapValue, false);
+                return new ResolvedInput(mapValue, false, null);
             }
         } catch (io.kestra.core.exceptions.IllegalVariableEvaluationException ignored) {
         }
-        return new ResolvedInput(value, false);
+        return new ResolvedInput(value, false, null);
     }
 
     private ResolvedInput resolveStorageCandidate(RunContext runContext, Object value) throws TransformException {
         if (value instanceof URI uriValue) {
             if (uriValue.getScheme() == null) {
-                return new ResolvedInput(value, false);
+                return new ResolvedInput(value, false, null);
             }
-            if (!runContext.storage().isFileExist(uriValue)) {
-                throw new TransformException("Storage file not found for URI: " + uriValue);
-            }
-            return new ResolvedInput(loadIonFromStorage(runContext, uriValue), true);
+            return new ResolvedInput(uriValue, true, uriValue);
         }
         if (value instanceof String stringValue) {
             URI uri;
@@ -321,10 +412,7 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
             if (uri.getScheme() == null) {
                 return null;
             }
-            if (!runContext.storage().isFileExist(uri)) {
-                throw new TransformException("Storage file not found for URI: " + uri);
-            }
-            return new ResolvedInput(loadIonFromStorage(runContext, uri), true);
+            return new ResolvedInput(uri, true, uri);
         }
         return null;
     }
@@ -332,8 +420,9 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
     private Object loadIonFromStorage(RunContext runContext, URI uri) throws TransformException {
         try (InputStream inputStream = runContext.storage().getFile(uri)) {
             IonList list = IonValueUtils.system().newEmptyList();
-            for (IonValue value : IonValueUtils.system().getLoader().load(inputStream)) {
-                list.add(IonValueUtils.cloneValue(value));
+            Iterator<IonValue> iterator = IonValueUtils.system().iterate(inputStream);
+            while (iterator.hasNext()) {
+                list.add(IonValueUtils.cloneValue(iterator.next()));
             }
             return unwrapIonList(list);
         } catch (IOException e) {
@@ -383,7 +472,7 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
         STORE
     }
 
-    private record ResolvedInput(Object value, boolean fromStorage) {
+    private record ResolvedInput(Object value, boolean fromStorage, URI storageUri) {
     }
 
     private static final class StatsAccumulator {

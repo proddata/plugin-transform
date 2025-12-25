@@ -131,6 +131,11 @@ test {
     finalizedBy jacocoTestReport
 }
 
+tasks.named("test").configure {
+    systemProperty("bench", System.getProperty("bench"))
+    systemProperty("bench.sizes", System.getProperty("bench.sizes"))
+}
+
 jacocoTestReport {
     dependsOn test
     reports {

@@ -39,7 +39,7 @@ public final class DefaultRecordTransformer implements RecordTransformer {
         return transformWithErrors(input).record;
     }
 
-    TransformOutcome transformWithErrors(IonStruct input) throws TransformException {
+    public TransformOutcome transformWithErrors(IonStruct input) throws TransformException {
         IonStruct output = IonValueUtils.system().newEmptyStruct();
         java.util.Map<String, String> errors = new HashMap<>();
         boolean failed = false;
@@ -96,13 +96,13 @@ public final class DefaultRecordTransformer implements RecordTransformer {
         return new TransformOutcome(output, failed, dropped, errors);
     }
 
-    static final class TransformOutcome {
-        final IonStruct record;
-        final boolean failed;
-        final boolean dropped;
-        final java.util.Map<String, String> fieldErrors;
+    public static final class TransformOutcome {
+        public final IonStruct record;
+        public final boolean failed;
+        public final boolean dropped;
+        public final java.util.Map<String, String> fieldErrors;
 
-        private TransformOutcome(IonStruct record, boolean failed, boolean dropped, java.util.Map<String, String> fieldErrors) {
+        public TransformOutcome(IonStruct record, boolean failed, boolean dropped, java.util.Map<String, String> fieldErrors) {
             this.record = record;
             this.failed = failed;
             this.dropped = dropped;

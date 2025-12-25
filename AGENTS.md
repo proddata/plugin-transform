@@ -19,6 +19,7 @@
 - Run tests: `./gradlew test`.
 - Build shadow jar: `./gradlew shadowJar`.
 - Local dev (from README): `./gradlew shadowJar && docker build -t kestra-custom . && docker run --rm -p 8080:8080 kestra-custom server local`.
+- Benchmarks (opt-in): `./gradlew test -Dbench=true --tests io.kestra.plugin.transform.BenchTest` (report: `build/bench/report.txt`).
 
 ## Map task behavior (current)
 - Input `from` can be a list/map, a single map, Ion structs/lists, or a storage URI (string/URI).
