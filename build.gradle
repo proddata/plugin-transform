@@ -133,7 +133,9 @@ test {
 
 tasks.named("test").configure {
     systemProperty("bench", System.getProperty("bench"))
-    systemProperty("bench.sizes", System.getProperty("bench.sizes"))
+    systemProperty("bench.records", System.getProperty("bench.records"))
+    systemProperty("bench.format", System.getProperty("bench.format"))
+    systemProperty("bench.compression", System.getProperty("bench.compression"))
 }
 
 jacocoTestReport {
