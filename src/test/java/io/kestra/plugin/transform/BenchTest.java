@@ -68,7 +68,10 @@ class BenchTest {
                 BenchResult filter = timeTaskWithMemory(() -> runFilter(runContext, inputUri));
                 writer.write(formatResult("Filter", filter));
                 writer.flush();
-                writer.write("Aggregate: skipped (in-memory grouping)\n");
+
+                BenchResult aggregate = timeTaskWithMemory(() -> runAggregate(runContext, inputUri));
+                writer.write(formatResult("Aggregate", aggregate));
+                writer.flush();
                 writer.write("\n");
                 writer.flush();
             }
@@ -97,15 +100,15 @@ class BenchTest {
         long written = 0L;
         int index = 0;
 
-        try (OutputStream outputStream = Files.newOutputStream(path);
-             IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+        try (OutputStream fileStream = Files.newOutputStream(path);
+             OutputStream outputStream = new java.io.BufferedOutputStream(fileStream);
+             CountingOutputStream countingStream = new CountingOutputStream(outputStream);
+             IonWriter writer = IonValueUtils.system().newTextWriter(countingStream)) {
             while (written < targetBytes) {
                 IonStruct record = createRecord(index++);
                 record.writeTo(writer);
-                writer.flush();
-                outputStream.write('\n');
-                outputStream.flush();
-                written = Files.size(path);
+                countingStream.write('\n');
+                written = countingStream.getCount();
             }
             writer.finish();
         }
@@ -220,5 +223,40 @@ class BenchTest {
     @FunctionalInterface
     private interface ThrowingRunnable {
         void run() throws Exception;
+    }
+
+    private static final class CountingOutputStream extends OutputStream implements AutoCloseable {
+        private final OutputStream delegate;
+        private long count;
+
+        private CountingOutputStream(OutputStream delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            delegate.write(b);
+            count++;
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            delegate.write(b, off, len);
+            count += len;
+        }
+
+        @Override
+        public void flush() throws IOException {
+            delegate.flush();
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
+        }
+
+        private long getCount() {
+            return count;
+        }
     }
 }

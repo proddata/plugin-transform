@@ -198,7 +198,6 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
                         if (decision) {
                             stats.passed++;
                             record.writeTo(writer);
-                            writer.flush();
                             outputStream.write('\n');
                         } else {
                             stats.dropped++;
@@ -215,7 +214,6 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
                         if (options.onError == OnErrorMode.KEEP) {
                             stats.passed++;
                             record.writeTo(writer);
-                            writer.flush();
                             outputStream.write('\n');
                         }
                     }
@@ -277,7 +275,6 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
             if (decision) {
                 stats.passed++;
                 record.writeTo(writer);
-                writer.flush();
                 outputStream.write('\n');
             } else {
                 stats.dropped++;
@@ -294,7 +291,6 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
             if (options.onError == OnErrorMode.KEEP) {
                 stats.passed++;
                 record.writeTo(writer);
-                writer.flush();
                 outputStream.write('\n');
             }
         }

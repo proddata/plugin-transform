@@ -326,7 +326,6 @@ public class Map extends Task implements RunnableTask<Map.Output> {
             IonStruct output = outcome.record;
             if (output != null) {
                 output.writeTo(writer);
-                writer.flush();
                 outputStream.write('\n');
             }
         }
@@ -382,7 +381,6 @@ public class Map extends Task implements RunnableTask<Map.Output> {
                     } else {
                         record.writeTo(writer);
                     }
-                    writer.flush();
                     outputStream.write('\n');
                 }
                 writer.finish();

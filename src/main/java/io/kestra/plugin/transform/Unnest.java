@@ -239,7 +239,6 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                         for (IonValue element : list) {
                             IonStruct output = buildOutputRecord(record, asField, element, options.keepUnknownFields);
                             output.writeTo(writer);
-                            writer.flush();
                             outputStream.write('\n');
                         }
                     } catch (ExpressionException | TransformException e) {
@@ -254,7 +253,6 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                         if (options.onError == TransformOptions.OnErrorMode.NULL) {
                             IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepUnknownFields);
                             output.writeTo(writer);
-                            writer.flush();
                             outputStream.write('\n');
                         }
                     }
@@ -329,7 +327,6 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
             for (IonValue element : list) {
                 IonStruct output = buildOutputRecord(record, asField, element, options.keepUnknownFields);
                 output.writeTo(writer);
-                writer.flush();
                 outputStream.write('\n');
             }
         } catch (ExpressionException | TransformException e) {
@@ -344,7 +341,6 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
             if (options.onError == TransformOptions.OnErrorMode.NULL) {
                 IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepUnknownFields);
                 output.writeTo(writer);
-                writer.flush();
                 outputStream.write('\n');
             }
         }

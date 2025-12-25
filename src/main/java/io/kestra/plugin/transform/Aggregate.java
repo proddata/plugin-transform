@@ -163,9 +163,11 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             if (definition == null) {
                 throw new TransformException("Aggregate definition is required for '" + entry.getKey() + "'");
             }
+            String expr = Objects.requireNonNull(definition.expr, "expr is required");
+            AggregateFunction function = parseAggregateFunction(expr);
             mappings.add(new AggregateMapping(
                 entry.getKey(),
-                Objects.requireNonNull(definition.expr, "expr is required"),
+                function,
                 definition.type
             ));
         }
@@ -176,10 +178,10 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
 
         Map<GroupKey, GroupBucket> grouped = new LinkedHashMap<>();
         if (resolvedInput.fromStorage()) {
-            groupFromStorage(runContext, resolvedInput.storageUri(), groupByFields, grouped, stats);
+            groupFromStorage(runContext, resolvedInput.storageUri(), groupByFields, mappings, grouped, stats, expressionEngine);
         } else {
             List<IonStruct> records = normalizeRecords(resolvedInput.value());
-            groupRecords(records, groupByFields, grouped, stats);
+            groupRecords(records, groupByFields, mappings, grouped, stats, expressionEngine);
         }
 
         OutputMode effectiveOutput = output == OutputMode.AUTO
@@ -187,7 +189,7 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             : output;
 
         if (effectiveOutput == OutputMode.STORE) {
-            URI stored = storeRecords(runContext, grouped, groupByFields, mappings, expressionEngine, caster, stats);
+            URI stored = storeRecords(runContext, grouped, groupByFields, mappings, caster, stats);
             runContext.metric(Counter.of("processed", stats.processed))
                 .metric(Counter.of("groups", stats.groups))
                 .metric(Counter.of("failed", stats.failed));
@@ -196,7 +198,7 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
                 .build();
         }
 
-        List<Object> rendered = aggregateToRecords(grouped, groupByFields, mappings, expressionEngine, caster, stats);
+        List<Object> rendered = aggregateToRecords(grouped, groupByFields, mappings, caster, stats);
         runContext.metric(Counter.of("processed", stats.processed))
             .metric(Counter.of("groups", stats.groups))
             .metric(Counter.of("failed", stats.failed));
@@ -208,12 +210,11 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
     private List<Object> aggregateToRecords(Map<GroupKey, GroupBucket> grouped,
                                             List<String> groupByFields,
                                             List<AggregateMapping> mappings,
-                                            DefaultExpressionEngine expressionEngine,
                                             DefaultIonCaster caster,
                                             StatsAccumulator stats) throws TransformException {
         List<Object> outputRecords = new ArrayList<>();
         for (GroupBucket bucket : grouped.values()) {
-            IonStruct output = aggregateBucket(bucket, groupByFields, mappings, expressionEngine, caster, stats);
+            IonStruct output = aggregateBucket(bucket, groupByFields, mappings, caster, stats);
             if (output != null) {
                 outputRecords.add(IonValueUtils.toJavaValue(output));
             }
@@ -223,30 +224,32 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
 
     private void groupRecords(List<IonStruct> records,
                               List<String> groupByFields,
+                              List<AggregateMapping> mappings,
                               Map<GroupKey, GroupBucket> grouped,
-                              StatsAccumulator stats) throws TransformException {
+                              StatsAccumulator stats,
+                              DefaultExpressionEngine expressionEngine) throws TransformException {
         for (IonStruct record : records) {
-            stats.processed++;
-            GroupKey key = buildGroupKey(record, groupByFields);
-            grouped.computeIfAbsent(key, k -> new GroupBucket(record, groupByFields)).records.add(record);
+            groupRecord(record, groupByFields, mappings, grouped, stats, expressionEngine);
         }
     }
 
     private void groupFromStorage(RunContext runContext,
                                   URI uri,
                                   List<String> groupByFields,
+                                  List<AggregateMapping> mappings,
                                   Map<GroupKey, GroupBucket> grouped,
-                                  StatsAccumulator stats) throws TransformException {
+                                  StatsAccumulator stats,
+                                  DefaultExpressionEngine expressionEngine) throws TransformException {
         try (InputStream inputStream = runContext.storage().getFile(uri)) {
             Iterator<IonValue> iterator = IonValueUtils.system().iterate(inputStream);
             while (iterator.hasNext()) {
                 IonValue value = iterator.next();
                 if (value instanceof IonList list) {
                     for (IonValue element : list) {
-                        groupStreamRecord(element, groupByFields, grouped, stats);
+                        groupStreamRecord(element, groupByFields, mappings, grouped, stats, expressionEngine);
                     }
                 } else {
-                    groupStreamRecord(value, groupByFields, grouped, stats);
+                    groupStreamRecord(value, groupByFields, mappings, grouped, stats, expressionEngine);
                 }
             }
         } catch (IOException e) {
@@ -256,19 +259,18 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
 
     private void groupStreamRecord(IonValue value,
                                    List<String> groupByFields,
+                                   List<AggregateMapping> mappings,
                                    Map<GroupKey, GroupBucket> grouped,
-                                   StatsAccumulator stats) throws TransformException {
+                                   StatsAccumulator stats,
+                                   DefaultExpressionEngine expressionEngine) throws TransformException {
         IonStruct record = asStruct(value);
-        stats.processed++;
-        GroupKey key = buildGroupKey(record, groupByFields);
-        grouped.computeIfAbsent(key, k -> new GroupBucket(record, groupByFields)).records.add(record);
+        groupRecord(record, groupByFields, mappings, grouped, stats, expressionEngine);
     }
 
     private URI storeRecords(RunContext runContext,
                              Map<GroupKey, GroupBucket> grouped,
                              List<String> groupByFields,
                              List<AggregateMapping> mappings,
-                             DefaultExpressionEngine expressionEngine,
                              DefaultIonCaster caster,
                              StatsAccumulator stats) throws TransformException {
         String name = "aggregate-" + UUID.randomUUID() + ".ion";
@@ -277,10 +279,9 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             try (OutputStream outputStream = java.nio.file.Files.newOutputStream(outputPath);
                  IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
                 for (GroupBucket bucket : grouped.values()) {
-                    IonStruct output = aggregateBucket(bucket, groupByFields, mappings, expressionEngine, caster, stats);
+                    IonStruct output = aggregateBucket(bucket, groupByFields, mappings, caster, stats);
                     if (output != null) {
                         output.writeTo(writer);
-                        writer.flush();
                         outputStream.write('\n');
                     }
                 }
@@ -295,26 +296,31 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
     private IonStruct aggregateBucket(GroupBucket bucket,
                                       List<String> groupByFields,
                                       List<AggregateMapping> mappings,
-                                      DefaultExpressionEngine expressionEngine,
                                       DefaultIonCaster caster,
                                       StatsAccumulator stats) throws TransformException {
+        if (bucket.skip) {
+            return null;
+        }
         IonStruct output = IonValueUtils.system().newEmptyStruct();
         for (String field : groupByFields) {
             IonValue value = bucket.groupValues.get(field);
             output.put(field, IonValueUtils.cloneValue(value));
         }
 
-        boolean failed = false;
         for (AggregateMapping mapping : mappings) {
+            AggregateState state = bucket.states.get(mapping.targetField);
+            IonValue aggregated = state.result();
+            if (IonValueUtils.isNull(aggregated)) {
+                output.put(mapping.targetField, IonValueUtils.nullValue());
+                continue;
+            }
             try {
-                IonValue aggregated = evaluateAggregate(mapping.expr, bucket.records, expressionEngine);
                 IonValue casted = aggregated;
-                if (mapping.type != null && !IonValueUtils.isNull(aggregated)) {
+                if (mapping.type != null) {
                     casted = caster.cast(aggregated, mapping.type);
                 }
                 output.put(mapping.targetField, IonValueUtils.cloneValue(casted));
-            } catch (ExpressionException | TransformException | CastException e) {
-                failed = true;
+            } catch (CastException e) {
                 stats.failed++;
                 if (options.onError == TransformOptions.OnErrorMode.FAIL) {
                     throw new TransformException(e.getMessage(), e);
@@ -327,151 +333,82 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
                 }
             }
         }
-
-        if (!failed || options.onError != TransformOptions.OnErrorMode.SKIP) {
-            stats.groups++;
-        }
+        stats.groups++;
         return output;
     }
 
-    private IonValue evaluateAggregate(String expression,
-                                       List<IonStruct> records,
-                                       DefaultExpressionEngine expressionEngine) throws ExpressionException, TransformException {
+    private void groupRecord(IonStruct record,
+                             List<String> groupByFields,
+                             List<AggregateMapping> mappings,
+                             Map<GroupKey, GroupBucket> grouped,
+                             StatsAccumulator stats,
+                             DefaultExpressionEngine expressionEngine) throws TransformException {
+        stats.processed++;
+        GroupKey key = buildGroupKey(record, groupByFields);
+        GroupBucket bucket = grouped.computeIfAbsent(key, k -> new GroupBucket(record, groupByFields, mappings));
+        if (bucket.skip) {
+            return;
+        }
+        for (AggregateMapping mapping : mappings) {
+            AggregateState state = bucket.states.get(mapping.targetField);
+            if (state.isFinal()) {
+                continue;
+            }
+            try {
+                state.update(record, expressionEngine);
+            } catch (ExpressionException | TransformException | CastException e) {
+                stats.failed++;
+                if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+                    throw new TransformException(e.getMessage(), e);
+                }
+                if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+                    bucket.skip = true;
+                    return;
+                }
+                if (options.onError == TransformOptions.OnErrorMode.NULL) {
+                    state.forceNull();
+                }
+            }
+        }
+    }
+
+    private AggregateFunction parseAggregateFunction(String expression) throws TransformException {
         String trimmed = expression == null ? "" : expression.trim();
         if ("count()".equals(trimmed)) {
-            return IonValueUtils.system().newInt(records.size());
+            return new AggregateFunction(AggregateFunctionType.COUNT, null);
         }
         if (trimmed.startsWith("sum(")) {
-            String arg = extractArgument(expression);
-            if (arg.isEmpty()) {
-                throw new TransformException("sum requires an argument");
-            }
-            return IonValueUtils.system().newDecimal(sum(valuesFor(arg, records, expressionEngine)));
+            return new AggregateFunction(AggregateFunctionType.SUM, extractArgument(expression, "sum"));
         }
         if (trimmed.startsWith("min(")) {
-            String arg = extractArgument(expression);
-            if (arg.isEmpty()) {
-                throw new TransformException("min requires an argument");
-            }
-            BigDecimal min = min(valuesFor(arg, records, expressionEngine));
-            return min == null ? IonValueUtils.nullValue() : IonValueUtils.system().newDecimal(min);
+            return new AggregateFunction(AggregateFunctionType.MIN, extractArgument(expression, "min"));
         }
         if (trimmed.startsWith("max(")) {
-            String arg = extractArgument(expression);
-            if (arg.isEmpty()) {
-                throw new TransformException("max requires an argument");
-            }
-            BigDecimal max = max(valuesFor(arg, records, expressionEngine));
-            return max == null ? IonValueUtils.nullValue() : IonValueUtils.system().newDecimal(max);
+            return new AggregateFunction(AggregateFunctionType.MAX, extractArgument(expression, "max"));
         }
         if (trimmed.startsWith("avg(")) {
-            String arg = extractArgument(expression);
-            if (arg.isEmpty()) {
-                throw new TransformException("avg requires an argument");
-            }
-            List<BigDecimal> values = valuesFor(arg, records, expressionEngine);
-            if (values.isEmpty()) {
-                return IonValueUtils.nullValue();
-            }
-            BigDecimal sum = sum(values);
-            return IonValueUtils.system().newDecimal(sum.divide(BigDecimal.valueOf(values.size()), java.math.RoundingMode.HALF_UP));
+            return new AggregateFunction(AggregateFunctionType.AVG, extractArgument(expression, "avg"));
         }
         if (trimmed.startsWith("first(")) {
-            String arg = extractArgument(expression);
-            if (arg.isEmpty()) {
-                throw new TransformException("first requires an argument");
-            }
-            IonValue value = firstValue(arg, records, expressionEngine);
-            return value == null ? IonValueUtils.nullValue() : IonValueUtils.cloneValue(value);
+            return new AggregateFunction(AggregateFunctionType.FIRST, extractArgument(expression, "first"));
         }
         if (trimmed.startsWith("last(")) {
-            String arg = extractArgument(expression);
-            if (arg.isEmpty()) {
-                throw new TransformException("last requires an argument");
-            }
-            IonValue value = lastValue(arg, records, expressionEngine);
-            return value == null ? IonValueUtils.nullValue() : IonValueUtils.cloneValue(value);
+            return new AggregateFunction(AggregateFunctionType.LAST, extractArgument(expression, "last"));
         }
         throw new TransformException("Unsupported aggregate expression: " + expression);
     }
 
-    private List<BigDecimal> valuesFor(String arg,
-                                       List<IonStruct> records,
-                                       DefaultExpressionEngine expressionEngine) throws ExpressionException, TransformException {
-        List<BigDecimal> values = new ArrayList<>();
-        for (IonStruct record : records) {
-            IonValue value = expressionEngine.evaluate(arg, record);
-            if (IonValueUtils.isNull(value)) {
-                continue;
-            }
-            try {
-                BigDecimal decimal = IonValueUtils.asDecimal(value);
-                if (decimal != null) {
-                    values.add(decimal);
-                }
-            } catch (CastException e) {
-                throw new TransformException("Expected numeric value for aggregate " + arg, e);
-            }
-        }
-        return values;
-    }
-
-    private IonValue firstValue(String arg,
-                                List<IonStruct> records,
-                                DefaultExpressionEngine expressionEngine) throws ExpressionException {
-        for (IonStruct record : records) {
-            IonValue value = expressionEngine.evaluate(arg, record);
-            if (!IonValueUtils.isNull(value)) {
-                return value;
-            }
-        }
-        return null;
-    }
-
-    private IonValue lastValue(String arg,
-                               List<IonStruct> records,
-                               DefaultExpressionEngine expressionEngine) throws ExpressionException {
-        IonValue last = null;
-        for (IonStruct record : records) {
-            IonValue value = expressionEngine.evaluate(arg, record);
-            if (!IonValueUtils.isNull(value)) {
-                last = value;
-            }
-        }
-        return last;
-    }
-
-    private String extractArgument(String expression) throws TransformException {
+    private String extractArgument(String expression, String name) throws TransformException {
         int start = expression.indexOf('(');
         int end = expression.lastIndexOf(')');
         if (start < 0 || end < 0 || end < start) {
-            return "";
+            throw new TransformException(name + " requires an argument");
         }
-        return expression.substring(start + 1, end).trim();
-    }
-
-    private BigDecimal sum(List<BigDecimal> values) {
-        BigDecimal total = BigDecimal.ZERO;
-        for (BigDecimal value : values) {
-            total = total.add(value);
+        String arg = expression.substring(start + 1, end).trim();
+        if (arg.isEmpty()) {
+            throw new TransformException(name + " requires an argument");
         }
-        return total;
-    }
-
-    private BigDecimal min(List<BigDecimal> values) {
-        BigDecimal min = null;
-        for (BigDecimal value : values) {
-            min = min == null ? value : min.min(value);
-        }
-        return min;
-    }
-
-    private BigDecimal max(List<BigDecimal> values) {
-        BigDecimal max = null;
-        for (BigDecimal value : values) {
-            max = max == null ? value : max.max(value);
-        }
-        return max;
+        return arg;
     }
 
     private GroupKey buildGroupKey(IonStruct record, List<String> groupByFields) throws TransformException {
@@ -665,7 +602,20 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
         STORE
     }
 
-    private record AggregateMapping(String targetField, String expr, IonTypeName type) {
+    private record AggregateMapping(String targetField, AggregateFunction function, IonTypeName type) {
+    }
+
+    private enum AggregateFunctionType {
+        COUNT,
+        SUM,
+        MIN,
+        MAX,
+        AVG,
+        FIRST,
+        LAST
+    }
+
+    private record AggregateFunction(AggregateFunctionType type, String arg) {
     }
 
     private record GroupKey(List<Object> values) {
@@ -687,13 +637,124 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
     }
 
     private static final class GroupBucket {
-        private final List<IonStruct> records = new ArrayList<>();
         private final Map<String, IonValue> groupValues = new LinkedHashMap<>();
+        private final Map<String, AggregateState> states = new LinkedHashMap<>();
+        private boolean skip;
 
-        private GroupBucket(IonStruct record, List<String> groupByFields) {
+        private GroupBucket(IonStruct record, List<String> groupByFields, List<AggregateMapping> mappings) {
             for (String field : groupByFields) {
                 groupValues.put(field, record.get(field));
             }
+            for (AggregateMapping mapping : mappings) {
+                states.put(mapping.targetField, new AggregateState(mapping.function));
+            }
+        }
+    }
+
+    private static final class AggregateState {
+        private final AggregateFunction function;
+        private BigDecimal sum;
+        private BigDecimal min;
+        private BigDecimal max;
+        private long count;
+        private IonValue first;
+        private IonValue last;
+        private boolean forceNull;
+
+        private AggregateState(AggregateFunction function) {
+            this.function = function;
+        }
+
+        private boolean isFinal() {
+            return forceNull;
+        }
+
+        private void forceNull() {
+            forceNull = true;
+        }
+
+        private void update(IonStruct record, DefaultExpressionEngine expressionEngine) throws ExpressionException, TransformException, CastException {
+            switch (function.type) {
+                case COUNT -> count++;
+                case SUM -> applyDecimal(record, expressionEngine, this::addToSum);
+                case MIN -> applyDecimal(record, expressionEngine, this::updateMin);
+                case MAX -> applyDecimal(record, expressionEngine, this::updateMax);
+                case AVG -> applyDecimal(record, expressionEngine, this::addToAvg);
+                case FIRST -> applyValue(record, expressionEngine, this::updateFirst);
+                case LAST -> applyValue(record, expressionEngine, this::updateLast);
+            }
+        }
+
+        private IonValue result() {
+            if (forceNull) {
+                return IonValueUtils.nullValue();
+            }
+            return switch (function.type) {
+                case COUNT -> IonValueUtils.system().newInt(count);
+                case SUM -> IonValueUtils.system().newDecimal(sum == null ? BigDecimal.ZERO : sum);
+                case MIN -> min == null ? IonValueUtils.nullValue() : IonValueUtils.system().newDecimal(min);
+                case MAX -> max == null ? IonValueUtils.nullValue() : IonValueUtils.system().newDecimal(max);
+                case AVG -> {
+                    if (count == 0) {
+                        yield IonValueUtils.nullValue();
+                    }
+                    BigDecimal total = sum == null ? BigDecimal.ZERO : sum;
+                    yield IonValueUtils.system().newDecimal(total.divide(BigDecimal.valueOf(count), java.math.RoundingMode.HALF_UP));
+                }
+                case FIRST -> first == null ? IonValueUtils.nullValue() : IonValueUtils.cloneValue(first);
+                case LAST -> last == null ? IonValueUtils.nullValue() : IonValueUtils.cloneValue(last);
+            };
+        }
+
+        private void applyDecimal(IonStruct record,
+                                  DefaultExpressionEngine expressionEngine,
+                                  java.util.function.BiConsumer<BigDecimal, AggregateState> consumer) throws ExpressionException, TransformException, CastException {
+            IonValue value = expressionEngine.evaluate(function.arg, record);
+            if (IonValueUtils.isNull(value)) {
+                return;
+            }
+            BigDecimal decimal = IonValueUtils.asDecimal(value);
+            if (decimal == null) {
+                return;
+            }
+            consumer.accept(decimal, this);
+        }
+
+        private void addToSum(BigDecimal value, AggregateState state) {
+            state.sum = state.sum == null ? value : state.sum.add(value);
+        }
+
+        private void updateMin(BigDecimal value, AggregateState state) {
+            state.min = state.min == null ? value : state.min.min(value);
+        }
+
+        private void updateMax(BigDecimal value, AggregateState state) {
+            state.max = state.max == null ? value : state.max.max(value);
+        }
+
+        private void addToAvg(BigDecimal value, AggregateState state) {
+            state.sum = state.sum == null ? value : state.sum.add(value);
+            state.count++;
+        }
+
+        private void applyValue(IonStruct record,
+                                DefaultExpressionEngine expressionEngine,
+                                java.util.function.BiConsumer<IonValue, AggregateState> consumer) throws ExpressionException, TransformException {
+            IonValue value = expressionEngine.evaluate(function.arg, record);
+            if (IonValueUtils.isNull(value)) {
+                return;
+            }
+            consumer.accept(value, this);
+        }
+
+        private void updateFirst(IonValue value, AggregateState state) {
+            if (state.first == null) {
+                state.first = IonValueUtils.cloneValue(value);
+            }
+        }
+
+        private void updateLast(IonValue value, AggregateState state) {
+            state.last = IonValueUtils.cloneValue(value);
         }
     }
 
