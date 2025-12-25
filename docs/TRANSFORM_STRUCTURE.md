@@ -79,7 +79,7 @@ This document explains how the Map task implementation is organized and how the 
   - Applies skip/drop/error logic per record.
 
 - `src/main/java/io/kestra/plugin/transform/engine/TransformResult.java`
-  - Output model: transformed records + stats.
+  - Output model: transformed records + internal stats.
 
 - `src/main/java/io/kestra/plugin/transform/engine/TransformStats.java`
   - Metrics: processed, failed, dropped, fieldErrors.
@@ -113,6 +113,7 @@ Map task
 ## Notes on Output
 
 - Task output uses JSON-safe Java values to avoid serializing Ion internals.
+- Processing counters are emitted as task metrics instead of output stats.
 - `output: AUTO` stores results when `from` resolves to a storage URI; otherwise it returns `records`.
 - `output: STORE` emits `uri` only; `output: RECORDS` emits `records` only.
 - If `type` is omitted, the expression result is returned as-is.

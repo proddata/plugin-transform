@@ -80,7 +80,7 @@ The Map task is a **declarative “select + rename + derive”** operator: it ta
     - FAIL: fail the task
     - SKIP: drop the entire record
     - NULL: set the failing field to null (unless `dropNulls` removes it)
-  - The task reports stats: `processed`, `failed`, `dropped`, and `fieldErrors`.
+- Processing counters are emitted as task metrics (processed/failed/dropped).
 
 **What it emits today**
 
@@ -90,7 +90,7 @@ The Map task is a **declarative “select + rename + derive”** operator: it ta
   - `output: STORE`: writes the transformed records as an **Ion file** to Kestra internal storage and returns `outputs.uri`.
   - `DECIMAL` becomes `BigDecimal`
   - `TIMESTAMP` becomes an ISO-8601 string
-- `outputs.stats` provides simple counters and a `fieldErrors` map keyed by record index + field.
+- Tasks emit metrics (processed/failed/dropped/passed/groups) instead of stats outputs.
 
 **What it does not try to do (by design, for MVP)**
 

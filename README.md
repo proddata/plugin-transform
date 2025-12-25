@@ -150,6 +150,31 @@ Example: download JSON and transform
       type: STRING
 ```
 
+Example: aggregate totals by customer
+```yaml
+- id: totals
+  type: io.kestra.plugin.transform.Aggregate
+  from: "{{ outputs.normalize.records }}"
+
+  groupBy:
+    - customer_id
+    - country
+
+  aggregates:
+    order_count:
+      expr: count()
+      type: INT
+    total_spent:
+      expr: sum(total_spent)
+      type: DECIMAL
+    last_order_at:
+      expr: max(created_at)
+      type: TIMESTAMP
+
+  options:
+    onError: FAIL
+```
+
 
 ## License
 Apache 2.0 © [Kestra Technologies](https://kestra.io)

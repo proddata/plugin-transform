@@ -46,4 +46,49 @@ class MapFlowTest {
         assertThat(uri != null, is(true));
         assertThat(uri.toString().startsWith("kestra://"), is(true));
     }
+
+    @Test
+    @ExecuteFlow("flows/unnest_flow_store.yaml")
+    void executesUnnestStoreFlow(Execution execution) {
+        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+
+        List<TaskRun> taskRuns = execution.findTaskRunsByTaskId("explode");
+        TaskRun taskRun = taskRuns.getFirst();
+        Map<String, Object> outputs = (Map<String, Object>) taskRun.getOutputs();
+
+        assertThat(outputs.containsKey("records"), is(false));
+        Object uri = outputs.get("uri");
+        assertThat(uri != null, is(true));
+        assertThat(uri.toString().startsWith("kestra://"), is(true));
+    }
+
+    @Test
+    @ExecuteFlow("flows/filter_flow_store.yaml")
+    void executesFilterStoreFlow(Execution execution) {
+        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+
+        List<TaskRun> taskRuns = execution.findTaskRunsByTaskId("filter");
+        TaskRun taskRun = taskRuns.getFirst();
+        Map<String, Object> outputs = (Map<String, Object>) taskRun.getOutputs();
+
+        assertThat(outputs.containsKey("records"), is(false));
+        Object uri = outputs.get("uri");
+        assertThat(uri != null, is(true));
+        assertThat(uri.toString().startsWith("kestra://"), is(true));
+    }
+
+    @Test
+    @ExecuteFlow("flows/aggregate_flow_store.yaml")
+    void executesAggregateStoreFlow(Execution execution) {
+        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+
+        List<TaskRun> taskRuns = execution.findTaskRunsByTaskId("aggregate");
+        TaskRun taskRun = taskRuns.getFirst();
+        Map<String, Object> outputs = (Map<String, Object>) taskRun.getOutputs();
+
+        assertThat(outputs.containsKey("records"), is(false));
+        Object uri = outputs.get("uri");
+        assertThat(uri != null, is(true));
+        assertThat(uri.toString().startsWith("kestra://"), is(true));
+    }
 }

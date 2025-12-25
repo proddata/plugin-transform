@@ -74,10 +74,7 @@ class MapTest {
         Map.Output output = task.run(runContext);
 
         assertThat(output.getRecords(), hasSize(1));
-        assertThat(output.getStats().processed(), is(2));
-        assertThat(output.getStats().failed(), is(1));
-        assertThat(output.getStats().dropped(), is(1));
-        assertThat(output.getStats().fieldErrors().size(), is(1));
+        assertThat(output.getRecords(), hasSize(1));
     }
 
     @Test

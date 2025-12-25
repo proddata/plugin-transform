@@ -7,27 +7,34 @@ tasks:
     type: io.kestra.plugin.core.http.Download
     uri: https://dummyjson.com/products
 
+  - id: explode
+    type: io.kestra.plugin.transform.Unnest
+    from: "{{ outputs.download.uri }}"
+    path: products[]
+    as: product
+    output: RECORDS
+
+  - id: filter
+    type: io.kestra.plugin.transform.Filter
+    from: "{{ outputs.explode.records }}"
+    where: product.price > 10
+    output: RECORDS
+
   - id: map
     type: io.kestra.plugin.transform.Map
-    from: "{{ outputs.download.uri }}"
+    from: "{{ outputs.filter.records }}"
     output: STORE
 
     fields:
-      product_count:
-        expr: count(products[].id)
+      id:
+        expr: product.id
         type: INT
-      total_price:
-        expr: sum(products[].price)
+      title:
+        expr: product.title
+        type: STRING
+      price:
+        expr: product.price
         type: DECIMAL
-      avg_price:
-        expr: sum(products[].price) / count(products[].price)
-        type: DECIMAL
-      titles:
-        expr: products[].title
-        type: LIST
-      has_products:
-        expr: count(products[].id) > 0
-        type: BOOLEAN
 
     options:
       keepUnknownFields: false
