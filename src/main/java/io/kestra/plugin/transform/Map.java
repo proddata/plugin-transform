@@ -12,8 +12,6 @@ import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
-import io.kestra.core.runners.RunContextProperty;
-import io.kestra.core.serializers.FileSerde;
 import io.kestra.plugin.transform.engine.DefaultRecordTransformer;
 import io.kestra.plugin.transform.engine.DefaultTransformTaskEngine;
 import io.kestra.plugin.transform.engine.FieldMapping;
@@ -23,6 +21,9 @@ import io.kestra.plugin.transform.expression.DefaultExpressionEngine;
 import io.kestra.plugin.transform.ion.DefaultIonCaster;
 import io.kestra.plugin.transform.ion.IonTypeName;
 import io.kestra.plugin.transform.ion.IonValueUtils;
+import io.kestra.plugin.transform.util.TransformTaskSupport;
+import io.kestra.plugin.transform.util.TransformException;
+import io.kestra.plugin.transform.util.TransformOptions;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -176,7 +177,7 @@ public class Map extends Task implements RunnableTask<Map.Output> {
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        ResolvedInput resolvedInput = resolveInput(runContext);
+        TransformTaskSupport.ResolvedInput resolvedInput = TransformTaskSupport.resolveInput(runContext, from);
 
         List<FieldMapping> mappings = new ArrayList<>();
         if (fields != null) {
@@ -219,7 +220,7 @@ public class Map extends Task implements RunnableTask<Map.Output> {
                 .build();
         }
 
-        List<IonStruct> records = normalizeRecords(resolveInMemory(runContext, resolvedInput));
+        List<IonStruct> records = TransformTaskSupport.normalizeRecords(resolveInMemory(runContext, resolvedInput));
         DefaultTransformTaskEngine engine = new DefaultTransformTaskEngine(transformer);
         TransformResult result = engine.execute(records);
 
@@ -244,11 +245,11 @@ public class Map extends Task implements RunnableTask<Map.Output> {
             .build();
     }
 
-    private Object resolveInMemory(RunContext runContext, ResolvedInput resolvedInput) throws TransformException {
+    private Object resolveInMemory(RunContext runContext, TransformTaskSupport.ResolvedInput resolvedInput) throws TransformException {
         if (!resolvedInput.fromStorage()) {
             return resolvedInput.value();
         }
-        return loadIonFromStorage(runContext, resolvedInput.storageUri());
+        return TransformTaskSupport.loadIonFromStorage(runContext, resolvedInput.storageUri());
     }
 
     private StreamResult transformStreamToStorage(RunContext runContext,
@@ -268,8 +269,8 @@ public class Map extends Task implements RunnableTask<Map.Output> {
 
         try (InputStream stream = inputStream) {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
-            try (OutputStream fileStream = java.nio.file.Files.newOutputStream(outputPath);
-                 OutputStream outputStream = new java.io.BufferedOutputStream(fileStream, FileSerde.BUFFER_SIZE);
+            try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
+                TransformTaskSupport.bufferedOutput(outputPath));
                  IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
                 Iterator<IonValue> iterator = IonValueUtils.system().iterate(stream);
                 int index = 0;
@@ -340,43 +341,12 @@ public class Map extends Task implements RunnableTask<Map.Output> {
     private record StreamResult(TransformStats stats, URI uri) {
     }
 
-    private List<IonStruct> normalizeRecords(Object rendered) throws TransformException {
-        if (rendered == null) {
-            return List.of();
-        }
-        if (rendered instanceof IonStruct ionStruct) {
-            return List.of(ionStruct);
-        }
-        if (rendered instanceof IonList ionList) {
-            List<IonStruct> records = new ArrayList<>();
-            for (IonValue value : ionList) {
-                IonStruct struct = asStruct(value);
-                records.add(struct);
-            }
-            return records;
-        }
-        if (rendered instanceof List<?> list) {
-            List<IonStruct> records = new ArrayList<>();
-            for (Object value : list) {
-                IonStruct struct = asStruct(IonValueUtils.toIonValue(value));
-                records.add(struct);
-            }
-            return records;
-        }
-        if (rendered instanceof java.util.Map<?, ?> map) {
-            IonStruct struct = asStruct(IonValueUtils.toIonValue(map));
-            return List.of(struct);
-        }
-        throw new TransformException("Unsupported input type: " + rendered.getClass().getName()
-            + ". The 'from' property must resolve to a list/map of records, Ion values, or a storage URI.");
-    }
-
     private URI storeRecords(RunContext runContext, List<IonStruct> records) throws TransformException {
         String name = "transform-" + UUID.randomUUID() + ".ion";
         try {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
-            try (OutputStream fileStream = java.nio.file.Files.newOutputStream(outputPath);
-                 OutputStream outputStream = new java.io.BufferedOutputStream(fileStream, FileSerde.BUFFER_SIZE);
+            try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
+                TransformTaskSupport.bufferedOutput(outputPath));
                  IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
                 for (IonStruct record : records) {
                     if (record == null) {
@@ -392,97 +362,6 @@ public class Map extends Task implements RunnableTask<Map.Output> {
         } catch (IOException e) {
             throw new TransformException("Unable to store transformed records", e);
         }
-    }
-
-    private ResolvedInput resolveInput(RunContext runContext) throws Exception {
-        if (from == null) {
-            return new ResolvedInput(null, false, null);
-        }
-
-        String expression = from.toString();
-        if (expression != null && expression.contains("{{") && expression.contains("}}")) {
-            Object typed = runContext.renderTyped(expression);
-            if (typed != null && !(typed instanceof String)) {
-                ResolvedInput resolved = resolveStorageCandidate(runContext, typed);
-                if (resolved != null) {
-                    return resolved;
-                }
-                return new ResolvedInput(typed, false, null);
-            }
-        }
-
-        RunContextProperty<Object> rendered = runContext.render(from);
-        Object value = rendered.as(Object.class).orElse(null);
-        ResolvedInput resolved = resolveStorageCandidate(runContext, value);
-        if (resolved != null) {
-            return resolved;
-        }
-        if (!(value instanceof String)) {
-            return new ResolvedInput(value, false, null);
-        }
-        try {
-            Object listValue = rendered.asList(Object.class);
-            if (listValue instanceof List) {
-                return new ResolvedInput(listValue, false, null);
-            }
-        } catch (io.kestra.core.exceptions.IllegalVariableEvaluationException ignored) {
-        }
-        try {
-            Object mapValue = rendered.asMap(String.class, Object.class);
-            if (mapValue instanceof java.util.Map) {
-                return new ResolvedInput(mapValue, false, null);
-            }
-        } catch (io.kestra.core.exceptions.IllegalVariableEvaluationException ignored) {
-        }
-        return new ResolvedInput(value, false, null);
-    }
-
-    private ResolvedInput resolveStorageCandidate(RunContext runContext, Object value) throws TransformException {
-        if (value instanceof URI uriValue) {
-            if (uriValue.getScheme() == null) {
-                return new ResolvedInput(value, false, null);
-            }
-            return new ResolvedInput(uriValue, true, uriValue);
-        }
-        if (value instanceof String stringValue) {
-            URI uri;
-            try {
-                uri = URI.create(stringValue);
-            } catch (IllegalArgumentException e) {
-                return null;
-            }
-            if (uri.getScheme() == null) {
-                return null;
-            }
-            return new ResolvedInput(uri, true, uri);
-        }
-        return null;
-    }
-
-    private Object loadIonFromStorage(RunContext runContext, URI uri) throws TransformException {
-        try (InputStream inputStream = runContext.storage().getFile(uri)) {
-            IonList list = IonValueUtils.system().newEmptyList();
-            Iterator<IonValue> iterator = IonValueUtils.system().iterate(inputStream);
-            while (iterator.hasNext()) {
-                list.add(IonValueUtils.cloneValue(iterator.next()));
-            }
-            return unwrapIonList(list);
-        } catch (IOException e) {
-            throw new TransformException("Unable to read Ion file from storage: " + uri, e);
-        }
-    }
-
-    private Object unwrapIonList(IonList list) {
-        if (list == null || list.isEmpty()) {
-            return List.of();
-        }
-        if (list.size() == 1) {
-            IonValue value = list.get(0);
-            if (value instanceof IonStruct || value instanceof IonList) {
-                return value;
-            }
-        }
-        return list;
     }
 
     private IonStruct asStruct(IonValue value) throws TransformException {
@@ -563,9 +442,6 @@ public class Map extends Task implements RunnableTask<Map.Output> {
         AUTO,
         RECORDS,
         STORE
-    }
-
-    private record ResolvedInput(Object value, boolean fromStorage, URI storageUri) {
     }
 
     @Builder

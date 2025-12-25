@@ -5,6 +5,8 @@ import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.plugin.transform.ion.IonTypeName;
+import io.kestra.plugin.transform.util.TransformException;
+import io.kestra.plugin.transform.util.TransformOptions;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 

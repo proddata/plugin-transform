@@ -1,7 +1,7 @@
 package io.kestra.plugin.transform.engine;
 
 import com.amazon.ion.IonStruct;
-import io.kestra.plugin.transform.TransformException;
+import io.kestra.plugin.transform.util.TransformException;
 
 import java.util.ArrayList;
 import java.util.HashMap;

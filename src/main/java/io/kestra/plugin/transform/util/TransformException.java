@@ -1,4 +1,4 @@
-package io.kestra.plugin.transform;
+package io.kestra.plugin.transform.util;
 
 public class TransformException extends Exception {
     public TransformException(String message) {

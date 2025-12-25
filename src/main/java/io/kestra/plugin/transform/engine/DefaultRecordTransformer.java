@@ -2,8 +2,8 @@ package io.kestra.plugin.transform.engine;
 
 import com.amazon.ion.IonStruct;
 import com.amazon.ion.IonValue;
-import io.kestra.plugin.transform.TransformException;
-import io.kestra.plugin.transform.TransformOptions;
+import io.kestra.plugin.transform.util.TransformException;
+import io.kestra.plugin.transform.util.TransformOptions;
 import io.kestra.plugin.transform.expression.ExpressionEngine;
 import io.kestra.plugin.transform.expression.ExpressionException;
 import io.kestra.plugin.transform.ion.CastException;
