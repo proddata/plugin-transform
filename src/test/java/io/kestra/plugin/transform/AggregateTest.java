@@ -69,9 +69,7 @@ class AggregateTest {
             .aggregates(java.util.Map.of(
                 "total_spent", Aggregate.AggregateDefinition.builder().expr("sum(total_spent)").type(IonTypeName.DECIMAL).build()
             ))
-            .options(Aggregate.Options.builder()
-                .onError(TransformOptions.OnErrorMode.NULL)
-                .build())
+            .onError(TransformOptions.OnErrorMode.NULL)
             .build();
 
         RunContext runContext = runContextFactory.of(java.util.Map.of());

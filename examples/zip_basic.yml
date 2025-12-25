@@ -22,5 +22,4 @@ tasks:
     type: io.kestra.plugin.transform.Zip
     left: "{{ outputs.left.values.records }}"
     right: "{{ outputs.right.values.records }}"
-    options:
-      onConflict: RIGHT
+    onConflict: RIGHT

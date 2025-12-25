@@ -76,9 +76,7 @@ class ZipTest {
         Zip task = Zip.builder()
             .left(Property.ofValue(left))
             .right(Property.ofValue(right))
-            .options(Zip.Options.builder()
-                .onConflict(Zip.ConflictMode.RIGHT)
-                .build())
+            .onConflict(Zip.ConflictMode.RIGHT)
             .build();
 
         RunContext runContext = runContextFactory.of(Map.of());
@@ -96,10 +94,8 @@ class ZipTest {
         Zip task = Zip.builder()
             .left(Property.ofValue(left))
             .right(Property.ofValue(right))
-            .options(Zip.Options.builder()
-                .onError(TransformOptions.OnErrorMode.SKIP)
-                .onConflict(Zip.ConflictMode.FAIL)
-                .build())
+            .onError(TransformOptions.OnErrorMode.SKIP)
+            .onConflict(Zip.ConflictMode.FAIL)
             .build();
 
         RunContext runContext = runContextFactory.of(Map.of());

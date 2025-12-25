@@ -46,9 +46,7 @@ class FilterTest {
         Filter task = Filter.builder()
             .from(Property.ofValue(List.of(record)))
             .where(Property.ofValue("total"))
-            .options(Filter.Options.builder()
-                .onError(Filter.OnErrorMode.KEEP)
-                .build())
+            .onError(Filter.OnErrorMode.KEEP)
             .build();
 
         RunContext runContext = runContextFactory.of(java.util.Map.of());
@@ -64,9 +62,7 @@ class FilterTest {
         Filter task = Filter.builder()
             .from(Property.ofValue(List.of(record)))
             .where(Property.ofValue("total"))
-            .options(Filter.Options.builder()
-                .onError(Filter.OnErrorMode.SKIP)
-                .build())
+            .onError(Filter.OnErrorMode.SKIP)
             .build();
 
         RunContext runContext = runContextFactory.of(java.util.Map.of());

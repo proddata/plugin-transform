@@ -71,9 +71,10 @@ The Map task is a **declarative “select + rename + derive”** operator: it ta
 - **Null handling**
   - `dropNulls: true` removes null-valued fields from the output record.
 
-- **Unknown fields**
-  - `keepUnknownFields: true` copies input fields not declared in `fields` into the output record.
-  - `keepUnknownFields: false` outputs only the declared fields.
+- **Original fields**
+  - `keepOriginalFields: true` copies input fields not declared in `fields` into the output record.
+  - `keepOriginalFields: false` outputs only the declared fields.
+  - If you map `a_new: a`, the original `a` is still kept because only target field names are considered mapped.
 
 - **Error handling**
   - `onError: FAIL | SKIP | NULL`

@@ -51,7 +51,7 @@ class DefaultRecordTransformerTest {
     }
 
     @Test
-    void keepsUnknownFieldsWhenEnabled() throws Exception {
+    void keepsOriginalFieldsWhenEnabled() throws Exception {
         DefaultRecordTransformer transformer = new DefaultRecordTransformer(
             List.of(new FieldMapping("value", "value", IonTypeName.INT, true)),
             new DefaultExpressionEngine(),

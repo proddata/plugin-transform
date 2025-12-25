@@ -68,8 +68,7 @@ import java.util.UUID;
                 "  total_spent:",
                 "    expr: sum(total_spent)",
                 "    type: DECIMAL",
-                "options:",
-                "  onError: FAIL"
+                "onError: FAIL"
             }
         ),
         @io.kestra.core.models.annotations.Example(
@@ -133,12 +132,9 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
     )
     private Map<String, AggregateDefinition> aggregates;
 
-    @Schema(
-        title = "Options",
-        description = "Output and error handling options."
-    )
     @Builder.Default
-    private Options options = new Options();
+    @Schema(title = "On error behavior")
+    private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
 
     @Schema(
         title = "Output mode",
@@ -325,13 +321,13 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
                 output.put(mapping.targetField, IonValueUtils.cloneValue(casted));
             } catch (CastException e) {
                 stats.failed++;
-                if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+                if (onError == TransformOptions.OnErrorMode.FAIL) {
                     throw new TransformException(e.getMessage(), e);
                 }
-                if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+                if (onError == TransformOptions.OnErrorMode.SKIP) {
                     return null;
                 }
-                if (options.onError == TransformOptions.OnErrorMode.NULL) {
+                if (onError == TransformOptions.OnErrorMode.NULL) {
                     output.put(mapping.targetField, IonValueUtils.nullValue());
                 }
             }
@@ -361,14 +357,14 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
                 state.update(record, expressionEngine);
             } catch (ExpressionException | TransformException | CastException e) {
                 stats.failed++;
-                if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+                if (onError == TransformOptions.OnErrorMode.FAIL) {
                     throw new TransformException(e.getMessage(), e);
                 }
-                if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+                if (onError == TransformOptions.OnErrorMode.SKIP) {
                     bucket.skip = true;
                     return;
                 }
-                if (options.onError == TransformOptions.OnErrorMode.NULL) {
+                if (onError == TransformOptions.OnErrorMode.NULL) {
                     state.forceNull();
                 }
             }
@@ -479,16 +475,6 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             }
             throw new IllegalArgumentException("Unsupported aggregate definition: " + value);
         }
-    }
-
-    @Builder
-    @Getter
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class Options {
-        @Builder.Default
-        @Schema(title = "On error behavior")
-        private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
     }
 
     public enum OutputMode {

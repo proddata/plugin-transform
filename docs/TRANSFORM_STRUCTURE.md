@@ -78,7 +78,7 @@ This document explains how the transform tasks are organized and how the core cl
   - Core record transform logic:
     - Evaluate expressions using the expression engine.
     - Cast if a type is provided; otherwise pass through the evaluated value.
-    - Apply `keepUnknownFields`, `dropNulls`, and `onError` rules.
+    - Apply `keepOriginalFields`, `dropNulls`, and `onError` rules.
     - Collect field-level errors.
 
 - `src/main/java/io/kestra/plugin/transform/util/TransformException.java`

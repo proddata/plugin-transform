@@ -45,7 +45,7 @@ public final class DefaultRecordTransformer implements RecordTransformer {
         boolean failed = false;
         boolean dropped = false;
 
-        if (options.keepUnknownFields()) {
+        if (options.keepOriginalFields()) {
             for (IonValue value : input) {
                 String fieldName = value.getFieldName();
                 if (mappingByTarget.containsKey(fieldName)) {

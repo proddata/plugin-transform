@@ -16,7 +16,6 @@ import io.kestra.plugin.transform.util.TransformException;
 import io.kestra.plugin.transform.util.TransformOptions;
 import io.kestra.plugin.transform.util.TransformTaskSupport;
 import io.swagger.v3.oas.annotations.media.Schema;
-import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -49,8 +48,7 @@ import java.util.UUID;
             code = {
                 "left: \"{{ outputs.left.records }}\"",
                 "right: \"{{ outputs.right.records }}\"",
-                "options:",
-                "  onConflict: RIGHT"
+                "onConflict: RIGHT"
             }
         )
     },
@@ -73,12 +71,13 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
     )
     private Property<Object> right;
 
-    @Schema(
-        title = "Options",
-        description = "Error handling and conflict behavior."
-    )
     @Builder.Default
-    private Options options = new Options();
+    @Schema(title = "On error behavior")
+    private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
+
+    @Builder.Default
+    @Schema(title = "On conflict behavior")
+    private ConflictMode onConflict = ConflictMode.FAIL;
 
     @Schema(
         title = "Output mode",
@@ -154,10 +153,10 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
                 outputRecords.add(IonValueUtils.toJavaValue(merged));
             } catch (TransformException e) {
                 stats.failed++;
-                if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+                if (onError == TransformOptions.OnErrorMode.FAIL) {
                     throw e;
                 }
-                if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+                if (onError == TransformOptions.OnErrorMode.SKIP) {
                     stats.dropped++;
                 }
             }
@@ -185,10 +184,10 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
                         outputStream.write('\n');
                     } catch (TransformException e) {
                         stats.failed++;
-                        if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+                        if (onError == TransformOptions.OnErrorMode.FAIL) {
                             throw e;
                         }
-                        if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+                        if (onError == TransformOptions.OnErrorMode.SKIP) {
                             stats.dropped++;
                         }
                     }
@@ -229,10 +228,10 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
                         outputStream.write('\n');
                     } catch (TransformException e) {
                         stats.failed++;
-                        if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+                        if (onError == TransformOptions.OnErrorMode.FAIL) {
                             throw e;
                         }
-                        if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+                        if (onError == TransformOptions.OnErrorMode.SKIP) {
                             stats.dropped++;
                         }
                     }
@@ -252,10 +251,10 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
         for (IonValue value : rightRecord) {
             String fieldName = value.getFieldName();
             if (merged.get(fieldName) != null) {
-                if (options.onConflict == ConflictMode.FAIL) {
+                if (onConflict == ConflictMode.FAIL) {
                     throw new TransformException("Field conflict on '" + fieldName + "'");
                 }
-                if (options.onConflict == ConflictMode.LEFT) {
+                if (onConflict == ConflictMode.LEFT) {
                     continue;
                 }
             }
@@ -367,20 +366,6 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
                 }
             }
         }
-    }
-
-    @Builder
-    @Getter
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class Options {
-        @Builder.Default
-        @Schema(title = "On error behavior")
-        private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
-
-        @Builder.Default
-        @Schema(title = "On conflict behavior")
-        private ConflictMode onConflict = ConflictMode.FAIL;
     }
 
     public enum ConflictMode {

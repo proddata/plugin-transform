@@ -51,10 +51,9 @@ tasks:
         expr: active
         type: BOOLEAN
 
-    options:
-      keepUnknownFields: false
-      dropNulls: true
-      onError: FAIL
+    keepOriginalFields: false
+    dropNulls: true
+    onError: FAIL
 
 
   # 3) Inspect the result (debug)

@@ -46,7 +46,8 @@ class MapTest {
                 "created_at", Map.FieldDefinition.builder().expr("createdAt").type(IonTypeName.TIMESTAMP).build(),
                 "total", Map.FieldDefinition.builder().expr("sum(items[].price)").type(IonTypeName.DECIMAL).build()
             ))
-            .options(Map.Options.builder().dropNulls(true).onError(TransformOptions.OnErrorMode.FAIL).build())
+            .dropNulls(true)
+            .onError(TransformOptions.OnErrorMode.FAIL)
             .build();
 
         RunContext runContext = runContextFactory.of(java.util.Map.of());
@@ -69,7 +70,7 @@ class MapTest {
             .fields(java.util.Map.of(
                 "value", Map.FieldDefinition.builder().expr("value").type(IonTypeName.INT).build()
             ))
-            .options(Map.Options.builder().onError(TransformOptions.OnErrorMode.SKIP).build())
+            .onError(TransformOptions.OnErrorMode.SKIP)
             .build();
 
         RunContext runContext = runContextFactory.of(java.util.Map.of());

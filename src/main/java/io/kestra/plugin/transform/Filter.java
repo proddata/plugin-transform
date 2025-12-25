@@ -18,7 +18,6 @@ import io.kestra.plugin.transform.ion.IonValueUtils;
 import io.kestra.plugin.transform.util.TransformTaskSupport;
 import io.kestra.plugin.transform.util.TransformException;
 import io.swagger.v3.oas.annotations.media.Schema;
-import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -52,8 +51,7 @@ import java.util.UUID;
             code = {
                 "from: \"{{ outputs.normalize.records }}\"",
                 "where: is_active && total_spent > 100",
-                "options:",
-                "  onError: SKIP"
+                "onError: SKIP"
             }
         )
     },
@@ -77,12 +75,9 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
     )
     private Property<String> where;
 
-    @Schema(
-        title = "Options",
-        description = "Error handling behavior."
-    )
     @Builder.Default
-    private Options options = new Options();
+    @Schema(title = "On error behavior")
+    private OnErrorMode onError = OnErrorMode.FAIL;
 
     @Schema(
         title = "Output mode",
@@ -165,14 +160,14 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
                 }
             } catch (ExpressionException | TransformException e) {
                 stats.failed++;
-                if (options.onError == OnErrorMode.FAIL) {
+                if (onError == OnErrorMode.FAIL) {
                     throw new TransformException(e.getMessage(), e);
                 }
-                if (options.onError == OnErrorMode.SKIP) {
+                if (onError == OnErrorMode.SKIP) {
                     stats.dropped++;
                     continue;
                 }
-                if (options.onError == OnErrorMode.KEEP) {
+                if (onError == OnErrorMode.KEEP) {
                     stats.passed++;
                     outputRecords.add(IonValueUtils.toJavaValue(record));
                 }
@@ -206,14 +201,14 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
                         }
                     } catch (ExpressionException | TransformException e) {
                         stats.failed++;
-                        if (options.onError == OnErrorMode.FAIL) {
+                        if (onError == OnErrorMode.FAIL) {
                             throw new TransformException(e.getMessage(), e);
                         }
-                        if (options.onError == OnErrorMode.SKIP) {
+                        if (onError == OnErrorMode.SKIP) {
                             stats.dropped++;
                             continue;
                         }
-                        if (options.onError == OnErrorMode.KEEP) {
+                        if (onError == OnErrorMode.KEEP) {
                             stats.passed++;
                             record.writeTo(writer);
                             outputStream.write('\n');
@@ -284,14 +279,14 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
             }
         } catch (ExpressionException | TransformException e) {
             stats.failed++;
-            if (options.onError == OnErrorMode.FAIL) {
+            if (onError == OnErrorMode.FAIL) {
                 throw new TransformException(e.getMessage(), e);
             }
-            if (options.onError == OnErrorMode.SKIP) {
+            if (onError == OnErrorMode.SKIP) {
                 stats.dropped++;
                 return;
             }
-            if (options.onError == OnErrorMode.KEEP) {
+            if (onError == OnErrorMode.KEEP) {
                 stats.passed++;
                 record.writeTo(writer);
                 outputStream.write('\n');
@@ -326,16 +321,6 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
             return struct;
         }
         throw new TransformException("Expected struct record, got " + (value == null ? "null" : value.getType()));
-    }
-
-    @Builder
-    @Getter
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class Options {
-        @Builder.Default
-        @Schema(title = "On error behavior")
-        private OnErrorMode onError = OnErrorMode.FAIL;
     }
 
     public enum OnErrorMode {

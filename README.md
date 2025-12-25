@@ -36,11 +36,11 @@ Map with casting and error handling:
       expr: sum(items[].price)
       type: DECIMAL
 
-  options:
-    keepUnknownFields: false
-    dropNulls: true
-    onError: SKIP
+  keepOriginalFields: false
+  dropNulls: true
+  onError: SKIP
 ```
+Note: `keepOriginalFields` keeps input fields not mapped by name; mapping `a_new: a` still keeps the original `a`.
 
 Unnest + Filter + Map:
 ```yaml
@@ -85,8 +85,7 @@ Aggregate totals:
     last_order_at:
       expr: max(created_at)
       type: TIMESTAMP
-  options:
-    onError: FAIL
+  onError: FAIL
 ```
 
 More flows live in `examples/`.

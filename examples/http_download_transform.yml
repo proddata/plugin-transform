@@ -36,10 +36,9 @@ tasks:
         expr: product.price
         type: DECIMAL
 
-    options:
-      keepUnknownFields: false
-      dropNulls: true
-      onError: NULL
+    keepOriginalFields: false
+    dropNulls: true
+    onError: NULL
 
   - id: debug
     type: io.kestra.plugin.core.log.Log

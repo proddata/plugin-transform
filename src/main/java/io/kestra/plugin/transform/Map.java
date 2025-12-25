@@ -69,9 +69,8 @@ import java.util.UUID;
                 "  total:",
                 "    expr: sum(items[].price)",
                 "    type: DECIMAL",
-                "options:",
-                "  dropNulls: true",
-                "  onError: SKIP"
+                "dropNulls: true",
+                "onError: SKIP"
             }
         ),
         @io.kestra.core.models.annotations.Example(
@@ -161,12 +160,20 @@ public class Map extends Task implements RunnableTask<Map.Output> {
     )
     private java.util.Map<String, FieldDefinition> fields;
 
-    @Schema(
-        title = "Transform options",
-        description = "Error and null handling for the transform."
-    )
     @Builder.Default
-    private Options options = new Options();
+    @Schema(
+        title = "Keep original fields",
+        description = "Keeps input fields not explicitly mapped. If you map a_new: a, the original a is still kept."
+    )
+    private boolean keepOriginalFields = false;
+
+    @Builder.Default
+    @Schema(title = "Drop null fields")
+    private boolean dropNulls = true;
+
+    @Builder.Default
+    @Schema(title = "On error behavior")
+    private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
 
     @Schema(
         title = "Output mode",
@@ -195,7 +202,7 @@ public class Map extends Task implements RunnableTask<Map.Output> {
             }
         }
 
-        TransformOptions transformOptions = options.toOptions();
+        TransformOptions transformOptions = new TransformOptions(keepOriginalFields, dropNulls, onError);
         DefaultRecordTransformer transformer = new DefaultRecordTransformer(
             mappings,
             new DefaultExpressionEngine(),
@@ -414,28 +421,6 @@ public class Map extends Task implements RunnableTask<Map.Output> {
             throw new IllegalArgumentException("Unsupported field definition: " + value);
         }
 
-    }
-
-    @Builder
-    @Getter
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class Options {
-        @Builder.Default
-        @Schema(title = "Keep unknown fields")
-        private boolean keepUnknownFields = false;
-
-        @Builder.Default
-        @Schema(title = "Drop null fields")
-        private boolean dropNulls = true;
-
-        @Builder.Default
-        @Schema(title = "On error behavior")
-        private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
-
-        TransformOptions toOptions() {
-            return new TransformOptions(keepUnknownFields, dropNulls, onError);
-        }
     }
 
     public enum OutputMode {

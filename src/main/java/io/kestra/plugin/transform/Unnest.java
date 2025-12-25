@@ -19,7 +19,6 @@ import io.kestra.plugin.transform.util.TransformTaskSupport;
 import io.kestra.plugin.transform.util.TransformException;
 import io.kestra.plugin.transform.util.TransformOptions;
 import io.swagger.v3.oas.annotations.media.Schema;
-import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -55,9 +54,8 @@ import java.util.UUID;
                 "from: \"{{ outputs.fetch.records }}\"",
                 "path: items[]",
                 "as: item",
-                "options:",
-                "  keepOtherFields: true",
-                "  onError: FAIL"
+                "keepOriginalFields: true",
+                "onError: FAIL"
             }
         )
     },
@@ -86,12 +84,16 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
     )
     private Property<String> as;
 
-    @Schema(
-        title = "Options",
-        description = "Behavior for unknown fields and error handling."
-    )
     @Builder.Default
-    private Options options = new Options();
+    @Schema(
+        title = "Keep original fields",
+        description = "Keeps original fields other than the exploded array field."
+    )
+    private boolean keepOriginalFields = true;
+
+    @Builder.Default
+    @Schema(title = "On error behavior")
+    private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
 
     @Schema(
         title = "Output mode",
@@ -197,20 +199,20 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                     continue;
                 }
                 for (IonValue element : list) {
-                    IonStruct output = buildOutputRecord(record, asField, element, options.keepOtherFields, pathSegments);
+                    IonStruct output = buildOutputRecord(record, asField, element, keepOriginalFields, pathSegments);
                     outputRecords.add(IonValueUtils.toJavaValue(output));
                 }
             } catch (ExpressionException | TransformException e) {
                 stats.fail(i, "path", e.getMessage());
-                if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+                if (onError == TransformOptions.OnErrorMode.FAIL) {
                     throw new TransformException(e.getMessage(), e);
                 }
-                if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+                if (onError == TransformOptions.OnErrorMode.SKIP) {
                     stats.dropped++;
                     continue;
                 }
-                if (options.onError == TransformOptions.OnErrorMode.NULL) {
-                    IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepOtherFields, pathSegments);
+                if (onError == TransformOptions.OnErrorMode.NULL) {
+                    IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), keepOriginalFields, pathSegments);
                     outputRecords.add(IonValueUtils.toJavaValue(output));
                 }
             }
@@ -246,21 +248,21 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                             continue;
                         }
                         for (IonValue element : list) {
-                            IonStruct output = buildOutputRecord(record, asField, element, options.keepOtherFields, pathSegments);
+                            IonStruct output = buildOutputRecord(record, asField, element, keepOriginalFields, pathSegments);
                             output.writeTo(writer);
                             outputStream.write('\n');
                         }
                     } catch (ExpressionException | TransformException e) {
                         stats.fail(i, "path", e.getMessage());
-                        if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+                        if (onError == TransformOptions.OnErrorMode.FAIL) {
                             throw new TransformException(e.getMessage(), e);
                         }
-                        if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+                        if (onError == TransformOptions.OnErrorMode.SKIP) {
                             stats.dropped++;
                             continue;
                         }
-                        if (options.onError == TransformOptions.OnErrorMode.NULL) {
-                            IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepOtherFields, pathSegments);
+                        if (onError == TransformOptions.OnErrorMode.NULL) {
+                            IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), keepOriginalFields, pathSegments);
                             output.writeTo(writer);
                             outputStream.write('\n');
                         }
@@ -357,21 +359,21 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                 return index + 1;
             }
             for (IonValue element : list) {
-                IonStruct output = buildOutputRecord(record, asField, element, options.keepOtherFields, pathSegments);
+                IonStruct output = buildOutputRecord(record, asField, element, keepOriginalFields, pathSegments);
                 output.writeTo(writer);
                 outputStream.write('\n');
             }
         } catch (ExpressionException | TransformException e) {
             stats.fail(index, "path", e.getMessage());
-            if (options.onError == TransformOptions.OnErrorMode.FAIL) {
+            if (onError == TransformOptions.OnErrorMode.FAIL) {
                 throw new TransformException(e.getMessage(), e);
             }
-            if (options.onError == TransformOptions.OnErrorMode.SKIP) {
+            if (onError == TransformOptions.OnErrorMode.SKIP) {
                 stats.dropped++;
                 return index + 1;
             }
-            if (options.onError == TransformOptions.OnErrorMode.NULL) {
-                IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), options.keepOtherFields, pathSegments);
+            if (onError == TransformOptions.OnErrorMode.NULL) {
+                IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), keepOriginalFields, pathSegments);
                 output.writeTo(writer);
                 outputStream.write('\n');
             }
@@ -382,10 +384,10 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
     private IonStruct buildOutputRecord(IonStruct input,
                                         String asField,
                                         IonValue element,
-                                        boolean keepOtherFields,
+                                        boolean keepOriginalFields,
                                         List<String> pathSegments) {
         IonStruct output = IonValueUtils.system().newEmptyStruct();
-        if (keepOtherFields) {
+        if (keepOriginalFields) {
             for (IonValue value : input) {
                 output.put(value.getFieldName(), IonValueUtils.cloneValue(value));
             }
@@ -460,23 +462,6 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
             return struct;
         }
         throw new TransformException("Expected struct record, got " + (value == null ? "null" : value.getType()));
-    }
-
-    @Builder
-    @Getter
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class Options {
-        @Builder.Default
-        @Schema(
-            title = "Keep other fields",
-            description = "Keeps original fields other than the exploded array field."
-        )
-        private boolean keepOtherFields = true;
-
-        @Builder.Default
-        @Schema(title = "On error behavior")
-        private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
     }
 
     public enum OutputMode {

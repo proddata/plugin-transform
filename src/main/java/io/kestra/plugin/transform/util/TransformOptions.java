@@ -1,7 +1,7 @@
 package io.kestra.plugin.transform.util;
 
 public record TransformOptions(
-    boolean keepUnknownFields,
+    boolean keepOriginalFields,
     boolean dropNulls,
     OnErrorMode onError
 ) {

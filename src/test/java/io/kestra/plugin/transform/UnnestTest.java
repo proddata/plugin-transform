@@ -58,9 +58,7 @@ class UnnestTest {
             .from(Property.ofValue(List.of(record)))
             .path(Property.ofValue("items[]"))
             .as(Property.ofValue("item"))
-            .options(Unnest.Options.builder()
-                .onError(TransformOptions.OnErrorMode.NULL)
-                .build())
+            .onError(TransformOptions.OnErrorMode.NULL)
             .build();
 
         RunContext runContext = runContextFactory.of(java.util.Map.of());
@@ -82,9 +80,7 @@ class UnnestTest {
             .from(Property.ofValue(List.of(record)))
             .path(Property.ofValue("items[]"))
             .as(Property.ofValue("item"))
-            .options(Unnest.Options.builder()
-                .onError(TransformOptions.OnErrorMode.SKIP)
-                .build())
+            .onError(TransformOptions.OnErrorMode.SKIP)
             .build();
 
         RunContext runContext = runContextFactory.of(java.util.Map.of());
