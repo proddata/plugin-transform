@@ -137,6 +137,19 @@ Example: read from records and store output Ion file
       type: INT
 ```
 
+Example: download JSON and transform
+```yaml
+- id: map_http_download
+  type: io.kestra.plugin.transform.Map
+  from: "{{ outputs.download.uri }}"
+  output: RECORDS
+
+  fields:
+    first_title:
+      expr: products[0].title
+      type: STRING
+```
+
 
 ## License
 Apache 2.0 © [Kestra Technologies](https://kestra.io)

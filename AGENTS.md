@@ -13,6 +13,7 @@
 - Tests: `src/test/java/io/kestra/plugin/transform/MapTest.java`.
 - Docs: `README.md`, `docs/TRANSFORM_STRUCTURE.md`, `Feature.md`.
 - Plugin metadata: `metadata/index.yaml`.
+- Example flows: `examples/` (YAML flows used for docs and manual testing).
 
 ## Build and test
 - Run tests: `./gradlew test`.

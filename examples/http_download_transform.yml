@@ -1,0 +1,39 @@
+id: http_download_transform
+namespace: playground.transform
+description: Download products JSON and map typed fields from a stored file
+
+tasks:
+  - id: download
+    type: io.kestra.plugin.core.http.Download
+    uri: https://dummyjson.com/products
+
+  - id: map
+    type: io.kestra.plugin.transform.Map
+    from: "{{ outputs.download.uri }}"
+    output: STORE
+
+    fields:
+      product_count:
+        expr: count(products[].id)
+        type: INT
+      total_price:
+        expr: sum(products[].price)
+        type: DECIMAL
+      avg_price:
+        expr: sum(products[].price) / count(products[].price)
+        type: DECIMAL
+      titles:
+        expr: products[].title
+        type: LIST
+      has_products:
+        expr: count(products[].id) > 0
+        type: BOOLEAN
+
+    options:
+      keepUnknownFields: false
+      dropNulls: true
+      onError: NULL
+
+  - id: debug
+    type: io.kestra.plugin.core.log.Log
+    message: "Stored transformed file at {{ outputs.map.uri }}"

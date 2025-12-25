@@ -114,6 +114,28 @@ import java.util.UUID;
                         expr: value
                         type: INT
                 """
+        ),
+        @io.kestra.core.models.annotations.Example(
+            title = "Download JSON and transform",
+            full = true,
+            code = """
+                id: map_http_download
+                namespace: company.team
+
+                tasks:
+                  - id: download
+                    type: io.kestra.plugin.core.http.Download
+                    uri: https://dummyjson.com/products
+
+                  - id: map
+                    type: io.kestra.plugin.transform.Map
+                    from: "{{ outputs.download.uri }}"
+                    output: RECORDS
+                    fields:
+                      first_title:
+                        expr: products[0].title
+                        type: STRING
+                """
         )
     }
 )
