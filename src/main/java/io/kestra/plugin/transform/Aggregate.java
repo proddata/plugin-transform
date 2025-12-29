@@ -18,6 +18,8 @@ import io.kestra.plugin.transform.ion.CastException;
 import io.kestra.plugin.transform.ion.DefaultIonCaster;
 import io.kestra.plugin.transform.ion.IonTypeName;
 import io.kestra.plugin.transform.ion.IonValueUtils;
+import io.kestra.plugin.transform.util.OutputFormat;
+import io.kestra.plugin.transform.util.TransformProfiler;
 import io.kestra.plugin.transform.util.TransformTaskSupport;
 import io.kestra.plugin.transform.util.TransformException;
 import io.kestra.plugin.transform.util.TransformOptions;
@@ -135,6 +137,13 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
     @Builder.Default
     @Schema(title = "On error behavior")
     private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
+
+    @Builder.Default
+    @Schema(
+        title = "Output format",
+        description = "Experimental: TEXT or BINARY. Only transform tasks can read binary Ion. Use TEXT as the final step."
+    )
+    private OutputFormat outputFormat = OutputFormat.TEXT;
 
     @Schema(
         title = "Output mode",
@@ -262,7 +271,12 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
                                    StatsAccumulator stats,
                                    DefaultExpressionEngine expressionEngine) throws TransformException {
         IonStruct record = asStruct(value);
+        boolean profile = TransformProfiler.isEnabled();
+        long transformStart = profile ? System.nanoTime() : 0L;
         groupRecord(record, groupByFields, mappings, grouped, stats, expressionEngine);
+        if (profile) {
+            TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
+        }
     }
 
     private URI storeRecords(RunContext runContext,
@@ -276,12 +290,17 @@ public class Aggregate extends Task implements RunnableTask<Aggregate.Output> {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
                 TransformTaskSupport.bufferedOutput(outputPath));
-                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                 IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
+                boolean profile = TransformProfiler.isEnabled();
                 for (GroupBucket bucket : grouped.values()) {
                     IonStruct output = aggregateBucket(bucket, groupByFields, mappings, caster, stats);
                     if (output != null) {
+                        long writeStart = profile ? System.nanoTime() : 0L;
                         output.writeTo(writer);
-                        outputStream.write('\n');
+                        TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                        if (profile) {
+                            TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                        }
                     }
                 }
                 writer.finish();

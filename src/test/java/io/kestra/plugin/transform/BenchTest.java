@@ -11,6 +11,7 @@ import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.plugin.transform.ion.IonTypeName;
 import io.kestra.plugin.transform.ion.IonValueUtils;
+import io.kestra.plugin.transform.util.TransformProfiler;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -45,18 +46,28 @@ class BenchTest {
         List<Integer> recordCounts = parseRecordCounts();
         OutputFormat format = parseFormat();
         Compression compression = parseCompression();
+        io.kestra.plugin.transform.util.OutputFormat outputFormat = parseOutputFormat();
         Path benchDir = Path.of("build", "bench");
         Files.createDirectories(benchDir);
         Path reportPath = benchDir.resolve("report.md");
 
         try (BufferedWriter writer = Files.newBufferedWriter(reportPath, StandardCharsets.UTF_8)) {
+            List<String> throughputRows = new ArrayList<>();
+            List<String> mapProfileRows = new ArrayList<>();
+            List<String> unnestProfileRows = new ArrayList<>();
+            List<String> filterProfileRows = new ArrayList<>();
+            List<String> aggregateProfileRows = new ArrayList<>();
+            List<String> zipProfileRows = new ArrayList<>();
+            boolean profileEnabled = isProfileEnabled();
             writer.write("# Kestra transform benchmark\n\n");
             writer.write("- Records: " + formatCountList(recordCounts) + "\n");
             writer.write("- Format: " + format.name().toLowerCase(java.util.Locale.ROOT) + "\n");
             writer.write("- Compression: " + compression.label + "\n");
+            writer.write("- Profile: " + (profileEnabled ? "tasks" : "off") + "\n");
+            writer.write("- Output format: " + outputFormat.name().toLowerCase(java.util.Locale.ROOT) + "\n");
             writer.write("- Output: build/bench\n\n");
-            writer.write("| Records | Input size | Generate (ms) | Read (ms) | Copy (ms) | Map (ms) | Unnest (ms) | Filter (ms) | Aggregate (ms) |\n");
-            writer.write("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+            writer.write("| Records | Input size | Generate (ms) | Read (ms) | Copy (ms) | Map (ms) | Unnest (ms) | Filter (ms) | Aggregate (ms) | Zip (ms) |\n");
+            writer.write("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
 
             for (int recordCount : recordCounts) {
                 Path inputPath = benchDir.resolve("input-" + recordCount + "." + format.fileExtension);
@@ -66,11 +77,17 @@ class BenchTest {
                 String inputUri = storeInput(runContext, inputPath);
 
                 BenchResult read = timeTaskWithMemory(() -> runReadOnly(runContext, inputUri));
-                BenchResult copy = timeTaskWithMemory(() -> runCopy(runContext, inputUri, compression));
-                BenchResult map = timeTaskWithMemory(() -> runMap(runContext, inputUri));
-                BenchResult unnest = timeTaskWithMemory(() -> runUnnest(runContext, inputUri));
-                BenchResult filter = timeTaskWithMemory(() -> runFilter(runContext, inputUri));
-                BenchResult aggregate = timeTaskWithMemory(() -> runAggregate(runContext, inputUri));
+                BenchResult copy = timeTaskWithMemory(() -> runCopy(runContext, inputUri, compression, outputFormat));
+                BenchResult map = timeTaskWithMemory(() -> runMap(runContext, inputUri, outputFormat));
+                BenchResult unnest = timeTaskWithMemory(() -> runUnnest(runContext, inputUri, outputFormat));
+                BenchResult filter = timeTaskWithMemory(() -> runFilter(runContext, inputUri, outputFormat));
+                BenchResult aggregate = timeTaskWithMemory(() -> runAggregate(runContext, inputUri, outputFormat));
+                BenchResult zip = timeTaskWithMemory(() -> runZip(runContext, inputUri, outputFormat));
+                ProfileResult mapProfile = profileEnabled ? profileTask(() -> runMap(runContext, inputUri, outputFormat)) : null;
+                ProfileResult unnestProfile = profileEnabled ? profileTask(() -> runUnnest(runContext, inputUri, outputFormat)) : null;
+                ProfileResult filterProfile = profileEnabled ? profileTask(() -> runFilter(runContext, inputUri, outputFormat)) : null;
+                ProfileResult aggregateProfile = profileEnabled ? profileTask(() -> runAggregate(runContext, inputUri, outputFormat)) : null;
+                ProfileResult zipProfile = profileEnabled ? profileTask(() -> runZip(runContext, inputUri, outputFormat)) : null;
                 writer.write("| " + formatCount(generation.records())
                     + " | " + formatSize(inputBytes)
                     + " | " + formatDuration(generation.durationMs())
@@ -81,8 +98,103 @@ class BenchTest {
                     + " | " + formatDuration(unnest.durationMs)
                     + " | " + formatDuration(filter.durationMs)
                     + " | " + formatDuration(aggregate.durationMs)
+                    + " | " + formatDuration(zip.durationMs)
                     + " |\n");
+                throughputRows.add("| " + formatCount(generation.records())
+                    + " | " + formatSize(inputBytes)
+                    + " | " + formatThroughput(inputBytes, read.durationMs)
+                    + " | " + formatThroughput(inputBytes, copy.durationMs)
+                    + " | " + formatThroughput(inputBytes, map.durationMs)
+                    + " | " + formatThroughput(inputBytes, unnest.durationMs)
+                    + " | " + formatThroughput(inputBytes, filter.durationMs)
+                    + " | " + formatThroughput(inputBytes, aggregate.durationMs)
+                    + " | " + formatThroughput(inputBytes, zip.durationMs)
+                    + " | " + formatDeltaMiB(read)
+                    + " | " + formatDeltaMiB(copy)
+                    + " | " + formatDeltaMiB(map)
+                    + " | " + formatDeltaMiB(unnest)
+                    + " | " + formatDeltaMiB(filter)
+                    + " | " + formatDeltaMiB(aggregate)
+                    + " | " + formatDeltaMiB(zip)
+                    + " |\n");
+                if (mapProfile != null) {
+                    mapProfileRows.add("| " + formatCount(generation.records())
+                        + " | " + formatSize(inputBytes)
+                        + " | " + formatDuration(mapProfile.totalMs)
+                        + " | " + formatDuration(mapProfile.readMs)
+                        + " | " + formatDuration(mapProfile.transformMs)
+                        + " | " + formatDuration(mapProfile.writeMs)
+                        + " |\n");
+                }
+                if (unnestProfile != null) {
+                    unnestProfileRows.add("| " + formatCount(generation.records())
+                        + " | " + formatSize(inputBytes)
+                        + " | " + formatDuration(unnestProfile.totalMs)
+                        + " | " + formatDuration(unnestProfile.readMs)
+                        + " | " + formatDuration(unnestProfile.transformMs)
+                        + " | " + formatDuration(unnestProfile.writeMs)
+                        + " |\n");
+                }
+                if (filterProfile != null) {
+                    filterProfileRows.add("| " + formatCount(generation.records())
+                        + " | " + formatSize(inputBytes)
+                        + " | " + formatDuration(filterProfile.totalMs)
+                        + " | " + formatDuration(filterProfile.readMs)
+                        + " | " + formatDuration(filterProfile.transformMs)
+                        + " | " + formatDuration(filterProfile.writeMs)
+                        + " |\n");
+                }
+                if (aggregateProfile != null) {
+                    aggregateProfileRows.add("| " + formatCount(generation.records())
+                        + " | " + formatSize(inputBytes)
+                        + " | " + formatDuration(aggregateProfile.totalMs)
+                        + " | " + formatDuration(aggregateProfile.readMs)
+                        + " | " + formatDuration(aggregateProfile.transformMs)
+                        + " | " + formatDuration(aggregateProfile.writeMs)
+                        + " |\n");
+                }
+                if (zipProfile != null) {
+                    zipProfileRows.add("| " + formatCount(generation.records())
+                        + " | " + formatSize(inputBytes)
+                        + " | " + formatDuration(zipProfile.totalMs)
+                        + " | " + formatDuration(zipProfile.readMs)
+                        + " | " + formatDuration(zipProfile.transformMs)
+                        + " | " + formatDuration(zipProfile.writeMs)
+                        + " |\n");
+                }
                 writer.flush();
+            }
+            writer.write("\n| Records | Input size | Read MiB/s | Copy MiB/s | Map MiB/s | Unnest MiB/s | Filter MiB/s | Aggregate MiB/s | Zip MiB/s | Read ΔMiB | Copy ΔMiB | Map ΔMiB | Unnest ΔMiB | Filter ΔMiB | Aggregate ΔMiB | Zip ΔMiB |\n");
+            writer.write("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+            for (String row : throughputRows) {
+                writer.write(row);
+            }
+            if (profileEnabled) {
+                writer.write("\n| Records | Input size | Map total (ms) | Map read/parse (ms) | Map transform (ms) | Map write (ms) |\n");
+                writer.write("| --- | --- | --- | --- | --- | --- |\n");
+                for (String row : mapProfileRows) {
+                    writer.write(row);
+                }
+                writer.write("\n| Records | Input size | Unnest total (ms) | Unnest read/parse (ms) | Unnest transform (ms) | Unnest write (ms) |\n");
+                writer.write("| --- | --- | --- | --- | --- | --- |\n");
+                for (String row : unnestProfileRows) {
+                    writer.write(row);
+                }
+                writer.write("\n| Records | Input size | Filter total (ms) | Filter read/parse (ms) | Filter transform (ms) | Filter write (ms) |\n");
+                writer.write("| --- | --- | --- | --- | --- | --- |\n");
+                for (String row : filterProfileRows) {
+                    writer.write(row);
+                }
+                writer.write("\n| Records | Input size | Aggregate total (ms) | Aggregate read/parse (ms) | Aggregate transform (ms) | Aggregate write (ms) |\n");
+                writer.write("| --- | --- | --- | --- | --- | --- |\n");
+                for (String row : aggregateProfileRows) {
+                    writer.write(row);
+                }
+                writer.write("\n| Records | Input size | Zip total (ms) | Zip read/parse (ms) | Zip transform (ms) | Zip write (ms) |\n");
+                writer.write("| --- | --- | --- | --- | --- | --- |\n");
+                for (String row : zipProfileRows) {
+                    writer.write(row);
+                }
             }
         }
     }
@@ -191,16 +303,27 @@ class BenchTest {
         }
     }
 
-    private void runMap(RunContext runContext, String uri) throws Exception {
+    private void runMap(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
         io.kestra.plugin.transform.Map task = io.kestra.plugin.transform.Map.builder()
             .from(Property.ofValue(uri))
             .output(io.kestra.plugin.transform.Map.OutputMode.STORE)
+            .outputFormat(outputFormat)
             .fields(Map.of(
                 "customer_id", io.kestra.plugin.transform.Map.FieldDefinition.builder().expr("customer_id").type(IonTypeName.STRING).build(),
                 "total_spent", io.kestra.plugin.transform.Map.FieldDefinition.builder().expr("total_spent").type(IonTypeName.DECIMAL).build()
             ))
             .build();
         task.run(runContext);
+    }
+
+    private ProfileResult profileTask(ThrowingRunnable runnable) throws Exception {
+        TransformProfiler.reset();
+        long totalMs = timeTask(runnable);
+        TransformProfiler.Snapshot snapshot = TransformProfiler.snapshot();
+        long transformMs = Duration.ofNanos(snapshot.transformNs()).toMillis();
+        long writeMs = Duration.ofNanos(snapshot.writeNs()).toMillis();
+        long readMs = Math.max(0L, totalMs - transformMs - writeMs);
+        return new ProfileResult(totalMs, readMs, transformMs, writeMs);
     }
 
     private void runReadOnly(RunContext runContext, String uri) throws Exception {
@@ -219,24 +342,27 @@ class BenchTest {
         }
     }
 
-    private void runCopy(RunContext runContext, String uri, Compression compression) throws Exception {
+    private void runCopy(RunContext runContext,
+                         String uri,
+                         Compression compression,
+                         io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
         try (InputStream inputStream = runContext.storage().getFile(java.net.URI.create(uri))) {
             Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream fileStream = java.nio.file.Files.newOutputStream(outputPath);
                  OutputStream baseStream = new java.io.BufferedOutputStream(fileStream);
                  OutputStream outputStream = wrapCompression(baseStream, compression);
-                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                 IonWriter writer = io.kestra.plugin.transform.util.TransformTaskSupport.createWriter(outputStream, outputFormat)) {
                 Iterator<IonValue> iterator = IonValueUtils.system().iterate(inputStream);
                 while (iterator.hasNext()) {
                     IonValue value = iterator.next();
                     if (value instanceof IonList list) {
                         for (IonValue element : list) {
                             element.writeTo(writer);
-                            outputStream.write('\n');
+                            io.kestra.plugin.transform.util.TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
                         }
                     } else {
                         value.writeTo(writer);
-                        outputStream.write('\n');
+                        io.kestra.plugin.transform.util.TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
                     }
                 }
                 writer.finish();
@@ -244,34 +370,48 @@ class BenchTest {
         }
     }
 
-    private void runUnnest(RunContext runContext, String uri) throws Exception {
+    private void runUnnest(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
         Unnest task = Unnest.builder()
             .from(Property.ofValue(uri))
             .output(Unnest.OutputMode.STORE)
+            .outputFormat(outputFormat)
             .path(Property.ofValue("items[]"))
             .as(Property.ofValue("item"))
             .build();
         task.run(runContext);
     }
 
-    private void runFilter(RunContext runContext, String uri) throws Exception {
+    private void runFilter(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
         Filter task = Filter.builder()
             .from(Property.ofValue(uri))
             .output(Filter.OutputMode.STORE)
+            .outputFormat(outputFormat)
             .where(Property.ofValue("active"))
             .build();
         task.run(runContext);
     }
 
-    private void runAggregate(RunContext runContext, String uri) throws Exception {
+    private void runAggregate(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
         Aggregate task = Aggregate.builder()
             .from(Property.ofValue(uri))
             .output(Aggregate.OutputMode.STORE)
+            .outputFormat(outputFormat)
             .groupBy(Property.ofValue(List.of("customer_id")))
             .aggregates(Map.of(
                 "order_count", Aggregate.AggregateDefinition.builder().expr("count()").type(IonTypeName.INT).build(),
                 "total_spent", Aggregate.AggregateDefinition.builder().expr("sum(total_spent)").type(IonTypeName.DECIMAL).build()
             ))
+            .build();
+        task.run(runContext);
+    }
+
+    private void runZip(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
+        Zip task = Zip.builder()
+            .left(Property.ofValue(uri))
+            .right(Property.ofValue(uri))
+            .onConflict(Zip.ConflictMode.RIGHT)
+            .output(Zip.OutputMode.STORE)
+            .outputFormat(outputFormat)
             .build();
         task.run(runContext);
     }
@@ -299,6 +439,9 @@ class BenchTest {
     private record BenchResult(long durationMs, long beforeBytes, long afterBytes) {
     }
 
+    private record ProfileResult(long totalMs, long readMs, long transformMs, long writeMs) {
+    }
+
     private record GenerationResult(boolean generated, long durationMs, long bytes, long records) {
     }
 
@@ -323,6 +466,20 @@ class BenchTest {
         return Long.toString(durationMs);
     }
 
+    private String formatThroughput(long bytes, long durationMs) {
+        if (durationMs <= 0) {
+            return "-";
+        }
+        double seconds = durationMs / 1000.0;
+        double mib = bytes / (1024.0 * 1024.0);
+        return String.format(java.util.Locale.ROOT, "%.2f MiB/s", mib / seconds);
+    }
+
+    private String formatDeltaMiB(BenchResult result) {
+        double delta = (result.afterBytes - result.beforeBytes) / (1024.0 * 1024.0);
+        return String.format(java.util.Locale.ROOT, "%.2f", delta);
+    }
+
     private OutputFormat parseFormat() {
         String raw = System.getProperty("bench.format");
         if (raw == null || raw.isBlank()) {
@@ -334,6 +491,17 @@ class BenchTest {
         return OutputFormat.TEXT;
     }
 
+    private io.kestra.plugin.transform.util.OutputFormat parseOutputFormat() {
+        String raw = System.getProperty("bench.outputFormat");
+        if (raw == null || raw.isBlank()) {
+            return io.kestra.plugin.transform.util.OutputFormat.TEXT;
+        }
+        if ("binary".equalsIgnoreCase(raw.trim())) {
+            return io.kestra.plugin.transform.util.OutputFormat.BINARY;
+        }
+        return io.kestra.plugin.transform.util.OutputFormat.TEXT;
+    }
+
     private Compression parseCompression() {
         String raw = System.getProperty("bench.compression");
         if (raw == null || raw.isBlank()) {
@@ -343,6 +511,11 @@ class BenchTest {
             return Compression.GZIP;
         }
         return Compression.NONE;
+    }
+
+    private boolean isProfileEnabled() {
+        String raw = System.getProperty("bench.profile");
+        return raw != null && "true".equalsIgnoreCase(raw.trim());
     }
 
     private enum OutputFormat {

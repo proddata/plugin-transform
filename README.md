@@ -18,6 +18,65 @@ Output mode (`output`) supports:
 - `RECORDS`: emit `outputs.records`
 - `STORE`: write newline-delimited Ion to internal storage and emit `outputs.uri`
 
+Experimental output format (`outputFormat`):
+- `TEXT` (default): newline-delimited Ion text
+- `BINARY`: Ion binary output (only readable by transform tasks; use TEXT as final step)
+
+## Common properties
+- `from`: input records or storage URI (all tasks except Zip)
+- `output`: `AUTO | RECORDS | STORE`
+- `onError`: error handling; varies by task (see below)
+
+## Task reference
+
+Map (`io.kestra.plugin.transform.Map`)
+- `from`, `fields`
+- `keepOriginalFields` (default `false`): keep input fields not mapped by target name
+- `dropNulls` (default `true`): drop null fields from output
+- `onError` (default `FAIL`): `FAIL | SKIP | NULL`
+- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
+- Outputs: `records` or `uri`
+
+Unnest (`io.kestra.plugin.transform.Unnest`)
+- `from`, `path`, `as`
+- `keepOriginalFields` (default `true`): keep original fields except the exploded array field
+- `onError` (default `FAIL`): `FAIL | SKIP | NULL`
+- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
+- Outputs: `records` or `uri`
+
+Filter (`io.kestra.plugin.transform.Filter`)
+- `from`, `where`
+- `onError` (default `FAIL`): `FAIL | SKIP | KEEP`
+- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
+- Outputs: `records` or `uri`
+
+Aggregate (`io.kestra.plugin.transform.Aggregate`)
+- `from`, `groupBy`, `aggregates`
+- `onError` (default `FAIL`): `FAIL | SKIP | NULL`
+- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
+- Outputs: `records` or `uri`
+
+Zip (`io.kestra.plugin.transform.Zip`)
+- `left`, `right`
+- `onError` (default `FAIL`): `FAIL | SKIP`
+- `onConflict` (default `FAIL`): `FAIL | LEFT | RIGHT`
+- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
+- `output`: `AUTO` stores if either side is a storage URI
+- Outputs: `records` or `uri`
+
+## Expression language (v1)
+- Field access: `user.id`
+- Nested: `user.address.city`
+- Arrays: `items[].price`
+- Comparisons: `> < == != >= <=`
+- Boolean: `&& || !`
+- Functions: `sum`, `count`, `min`, `max`, `avg`, `first`, `last`, `coalesce`, `concat`, `toInt`, `toDecimal`, `toString`, `toBoolean`, `parseTimestamp`
+
+## Type casting
+- `type` is optional in Map/Aggregate definitions.
+- If `type` is omitted, the evaluated Ion value is passed through.
+- `TIMESTAMP` supports Ion timestamps and ISO-8601 strings (`parseTimestamp` can convert strings).
+
 ## Examples
 Map with casting and error handling:
 ```yaml
@@ -88,7 +147,19 @@ Aggregate totals:
   onError: FAIL
 ```
 
+## Examples index
+- `examples/api_to_typed_records.yml`: normalize API output into typed fields
+- `examples/http_download_transform.yml`: download products, unnest, map, and store
+- `examples/dummyjson_products_flow.yml`: unnest products, filter, map
+- `examples/dummyjson_carts_flow.yml`: compute max product total per cart and filter
+- `examples/dummyjson_users_flow.yml`: unnest users, map, filter
+- `examples/aggregate_totals.yml`: group and aggregate totals
+- `examples/zip_basic.yml`: zip two record streams by position
+
 More flows live in `examples/`.
+
+## Migration notes
+See `docs/UPGRADE.md` for breaking changes (options flattening, renamed fields).
 
 ## Development
 Prerequisites:

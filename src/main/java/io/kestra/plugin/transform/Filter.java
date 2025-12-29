@@ -15,6 +15,8 @@ import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.transform.expression.DefaultExpressionEngine;
 import io.kestra.plugin.transform.expression.ExpressionException;
 import io.kestra.plugin.transform.ion.IonValueUtils;
+import io.kestra.plugin.transform.util.OutputFormat;
+import io.kestra.plugin.transform.util.TransformProfiler;
 import io.kestra.plugin.transform.util.TransformTaskSupport;
 import io.kestra.plugin.transform.util.TransformException;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -78,6 +80,13 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
     @Builder.Default
     @Schema(title = "On error behavior")
     private OnErrorMode onError = OnErrorMode.FAIL;
+
+    @Builder.Default
+    @Schema(
+        title = "Output format",
+        description = "Experimental: TEXT or BINARY. Only transform tasks can read binary Ion. Use TEXT as the final step."
+    )
+    private OutputFormat outputFormat = OutputFormat.TEXT;
 
     @Schema(
         title = "Output mode",
@@ -186,16 +195,25 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
                 TransformTaskSupport.bufferedOutput(outputPath));
-                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                 IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
+                boolean profile = TransformProfiler.isEnabled();
                 for (int i = 0; i < records.size(); i++) {
                     IonStruct record = records.get(i);
                     stats.processed++;
                     try {
+                        long transformStart = profile ? System.nanoTime() : 0L;
                         Boolean decision = evaluateBoolean(whereExpr, record, expressionEngine);
+                        if (profile) {
+                            TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
+                        }
                         if (decision) {
                             stats.passed++;
+                            long writeStart = profile ? System.nanoTime() : 0L;
                             record.writeTo(writer);
-                            outputStream.write('\n');
+                            TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                            if (profile) {
+                                TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                            }
                         } else {
                             stats.dropped++;
                         }
@@ -210,8 +228,12 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
                         }
                         if (onError == OnErrorMode.KEEP) {
                             stats.passed++;
+                            long writeStart = profile ? System.nanoTime() : 0L;
                             record.writeTo(writer);
-                            outputStream.write('\n');
+                            TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                            if (profile) {
+                                TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                            }
                         }
                     }
                 }
@@ -240,16 +262,17 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
                 TransformTaskSupport.bufferedOutput(outputPath));
-                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                 IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
+                boolean profile = TransformProfiler.isEnabled();
                 Iterator<IonValue> iterator = IonValueUtils.system().iterate(stream);
                 while (iterator.hasNext()) {
                     IonValue value = iterator.next();
                     if (value instanceof IonList list) {
                         for (IonValue element : list) {
-                            filterStreamRecord(element, whereExpr, expressionEngine, stats, writer, outputStream);
+                            filterStreamRecord(element, whereExpr, expressionEngine, stats, writer, outputStream, profile);
                         }
                     } else {
-                        filterStreamRecord(value, whereExpr, expressionEngine, stats, writer, outputStream);
+                        filterStreamRecord(value, whereExpr, expressionEngine, stats, writer, outputStream, profile);
                     }
                 }
                 writer.finish();
@@ -265,15 +288,24 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
                                     DefaultExpressionEngine expressionEngine,
                                     StatsAccumulator stats,
                                     IonWriter writer,
-                                    OutputStream outputStream) throws TransformException, IOException {
+                                    OutputStream outputStream,
+                                    boolean profile) throws TransformException, IOException {
         IonStruct record = asStruct(value);
         stats.processed++;
         try {
+            long transformStart = profile ? System.nanoTime() : 0L;
             Boolean decision = evaluateBoolean(whereExpr, record, expressionEngine);
+            if (profile) {
+                TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
+            }
             if (decision) {
                 stats.passed++;
+                long writeStart = profile ? System.nanoTime() : 0L;
                 record.writeTo(writer);
-                outputStream.write('\n');
+                TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                if (profile) {
+                    TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                }
             } else {
                 stats.dropped++;
             }
@@ -288,8 +320,12 @@ public class Filter extends Task implements RunnableTask<Filter.Output> {
             }
             if (onError == OnErrorMode.KEEP) {
                 stats.passed++;
+                long writeStart = profile ? System.nanoTime() : 0L;
                 record.writeTo(writer);
-                outputStream.write('\n');
+                TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                if (profile) {
+                    TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                }
             }
         }
     }

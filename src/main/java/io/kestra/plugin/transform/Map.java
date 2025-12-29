@@ -21,6 +21,8 @@ import io.kestra.plugin.transform.expression.DefaultExpressionEngine;
 import io.kestra.plugin.transform.ion.DefaultIonCaster;
 import io.kestra.plugin.transform.ion.IonTypeName;
 import io.kestra.plugin.transform.ion.IonValueUtils;
+import io.kestra.plugin.transform.util.OutputFormat;
+import io.kestra.plugin.transform.util.TransformProfiler;
 import io.kestra.plugin.transform.util.TransformTaskSupport;
 import io.kestra.plugin.transform.util.TransformException;
 import io.kestra.plugin.transform.util.TransformOptions;
@@ -175,6 +177,13 @@ public class Map extends Task implements RunnableTask<Map.Output> {
     @Schema(title = "On error behavior")
     private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
 
+    @Builder.Default
+    @Schema(
+        title = "Output format",
+        description = "Experimental: TEXT or BINARY. Only transform tasks can read binary Ion. Use TEXT as the final step."
+    )
+    private OutputFormat outputFormat = OutputFormat.TEXT;
+
     @Schema(
         title = "Output mode",
         description = "AUTO stores to internal storage when the input is a storage URI; otherwise it returns records."
@@ -278,7 +287,7 @@ public class Map extends Task implements RunnableTask<Map.Output> {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
                 TransformTaskSupport.bufferedOutput(outputPath));
-                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                 IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
                 Iterator<IonValue> iterator = IonValueUtils.system().iterate(stream);
                 int index = 0;
                 while (iterator.hasNext()) {
@@ -326,7 +335,12 @@ public class Map extends Task implements RunnableTask<Map.Output> {
                                                java.util.Map<String, String> fieldErrors,
                                                int index) throws TransformException, IOException {
         IonStruct record = asStruct(value);
+        boolean profile = TransformProfiler.isEnabled();
+        long transformStart = profile ? System.nanoTime() : 0L;
         DefaultRecordTransformer.TransformOutcome outcome = transformer.transformWithErrors(record);
+        if (profile) {
+            TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
+        }
         if (outcome.failed) {
             for (Entry<String, String> entry : outcome.fieldErrors.entrySet()) {
                 fieldErrors.put(index + "." + entry.getKey(), entry.getValue());
@@ -335,8 +349,12 @@ public class Map extends Task implements RunnableTask<Map.Output> {
         if (!outcome.dropped) {
             IonStruct output = outcome.record;
             if (output != null) {
+                long writeStart = profile ? System.nanoTime() : 0L;
                 output.writeTo(writer);
-                outputStream.write('\n');
+                TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                if (profile) {
+                    TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                }
             }
         }
         return new StreamCounters(index + 1, outcome.failed, outcome.dropped);
@@ -354,14 +372,19 @@ public class Map extends Task implements RunnableTask<Map.Output> {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
                 TransformTaskSupport.bufferedOutput(outputPath));
-                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                 IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
+                boolean profile = TransformProfiler.isEnabled();
                 for (IonStruct record : records) {
+                    long writeStart = profile ? System.nanoTime() : 0L;
                     if (record == null) {
                         writer.writeNull();
                     } else {
                         record.writeTo(writer);
                     }
-                    outputStream.write('\n');
+                    TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                    if (profile) {
+                        TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                    }
                 }
                 writer.finish();
             }

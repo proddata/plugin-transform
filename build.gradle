@@ -136,6 +136,8 @@ tasks.named("test").configure {
     systemProperty("bench.records", System.getProperty("bench.records"))
     systemProperty("bench.format", System.getProperty("bench.format"))
     systemProperty("bench.compression", System.getProperty("bench.compression"))
+    systemProperty("bench.profile", System.getProperty("bench.profile"))
+    systemProperty("bench.outputFormat", System.getProperty("bench.outputFormat"))
 }
 
 jacocoTestReport {

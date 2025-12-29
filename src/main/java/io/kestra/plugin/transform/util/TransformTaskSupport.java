@@ -3,6 +3,8 @@ package io.kestra.plugin.transform.util;
 import com.amazon.ion.IonList;
 import com.amazon.ion.IonStruct;
 import com.amazon.ion.IonValue;
+import com.amazon.ion.IonWriter;
+import com.amazon.ion.system.IonBinaryWriterBuilder;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextProperty;
@@ -141,6 +143,19 @@ public final class TransformTaskSupport {
             return new GZIPOutputStream(outputStream, true);
         }
         return outputStream;
+    }
+
+    public static IonWriter createWriter(OutputStream outputStream, OutputFormat format) throws IOException {
+        if (format == OutputFormat.BINARY) {
+            return IonBinaryWriterBuilder.standard().build(outputStream);
+        }
+        return IonValueUtils.system().newTextWriter(outputStream);
+    }
+
+    public static void writeDelimiter(OutputStream outputStream, OutputFormat format) throws IOException {
+        if (format == OutputFormat.TEXT) {
+            outputStream.write('\n');
+        }
     }
 
     private static IonStruct asStruct(IonValue value) throws TransformException {

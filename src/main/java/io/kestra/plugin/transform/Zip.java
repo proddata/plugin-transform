@@ -12,8 +12,10 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.transform.ion.IonValueUtils;
+import io.kestra.plugin.transform.util.OutputFormat;
 import io.kestra.plugin.transform.util.TransformException;
 import io.kestra.plugin.transform.util.TransformOptions;
+import io.kestra.plugin.transform.util.TransformProfiler;
 import io.kestra.plugin.transform.util.TransformTaskSupport;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Builder;
@@ -78,6 +80,13 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
     @Builder.Default
     @Schema(title = "On conflict behavior")
     private ConflictMode onConflict = ConflictMode.FAIL;
+
+    @Builder.Default
+    @Schema(
+        title = "Output format",
+        description = "Experimental: TEXT or BINARY. Only transform tasks can read binary Ion. Use TEXT as the final step."
+    )
+    private OutputFormat outputFormat = OutputFormat.TEXT;
 
     @Schema(
         title = "Output mode",
@@ -173,15 +182,24 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
                 TransformTaskSupport.bufferedOutput(outputPath));
-                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                 IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
+                boolean profile = TransformProfiler.isEnabled();
                 for (int i = 0; i < leftRecords.size(); i++) {
                     stats.processed++;
                     IonStruct leftRecord = leftRecords.get(i);
                     IonStruct rightRecord = rightRecords.get(i);
                     try {
+                        long transformStart = profile ? System.nanoTime() : 0L;
                         IonStruct merged = mergeRecords(leftRecord, rightRecord);
+                        if (profile) {
+                            TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
+                        }
+                        long writeStart = profile ? System.nanoTime() : 0L;
                         merged.writeTo(writer);
-                        outputStream.write('\n');
+                        TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                        if (profile) {
+                            TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                        }
                     } catch (TransformException e) {
                         stats.failed++;
                         if (onError == TransformOptions.OnErrorMode.FAIL) {
@@ -209,7 +227,8 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
                 TransformTaskSupport.bufferedOutput(outputPath));
-                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                 IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
+                boolean profile = TransformProfiler.isEnabled();
                 while (true) {
                     boolean leftHas = leftCursor.hasNext();
                     boolean rightHas = rightCursor.hasNext();
@@ -223,9 +242,17 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
                     try {
                         IonStruct leftRecord = leftCursor.nextStruct();
                         IonStruct rightRecord = rightCursor.nextStruct();
+                        long transformStart = profile ? System.nanoTime() : 0L;
                         IonStruct merged = mergeRecords(leftRecord, rightRecord);
+                        if (profile) {
+                            TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
+                        }
+                        long writeStart = profile ? System.nanoTime() : 0L;
                         merged.writeTo(writer);
-                        outputStream.write('\n');
+                        TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                        if (profile) {
+                            TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                        }
                     } catch (TransformException e) {
                         stats.failed++;
                         if (onError == TransformOptions.OnErrorMode.FAIL) {

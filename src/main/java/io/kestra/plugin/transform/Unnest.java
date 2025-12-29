@@ -15,6 +15,8 @@ import io.kestra.plugin.transform.engine.TransformStats;
 import io.kestra.plugin.transform.expression.DefaultExpressionEngine;
 import io.kestra.plugin.transform.expression.ExpressionException;
 import io.kestra.plugin.transform.ion.IonValueUtils;
+import io.kestra.plugin.transform.util.OutputFormat;
+import io.kestra.plugin.transform.util.TransformProfiler;
 import io.kestra.plugin.transform.util.TransformTaskSupport;
 import io.kestra.plugin.transform.util.TransformException;
 import io.kestra.plugin.transform.util.TransformOptions;
@@ -94,6 +96,13 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
     @Builder.Default
     @Schema(title = "On error behavior")
     private TransformOptions.OnErrorMode onError = TransformOptions.OnErrorMode.FAIL;
+
+    @Builder.Default
+    @Schema(
+        title = "Output format",
+        description = "Experimental: TEXT or BINARY. Only transform tasks can read binary Ion. Use TEXT as the final step."
+    )
+    private OutputFormat outputFormat = OutputFormat.TEXT;
 
     @Schema(
         title = "Output mode",
@@ -232,12 +241,17 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
                 TransformTaskSupport.bufferedOutput(outputPath));
-                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                 IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
+                boolean profile = TransformProfiler.isEnabled();
                 for (int i = 0; i < records.size(); i++) {
                     IonStruct record = records.get(i);
                     stats.processed++;
                     try {
+                        long transformStart = profile ? System.nanoTime() : 0L;
                         IonValue evaluated = expressionEngine.evaluate(pathExpr, record);
+                        if (profile) {
+                            TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
+                        }
                         if (IonValueUtils.isNull(evaluated)) {
                             continue;
                         }
@@ -248,9 +262,17 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                             continue;
                         }
                         for (IonValue element : list) {
+                            long elementStart = profile ? System.nanoTime() : 0L;
                             IonStruct output = buildOutputRecord(record, asField, element, keepOriginalFields, pathSegments);
+                            if (profile) {
+                                TransformProfiler.addTransformNs(System.nanoTime() - elementStart);
+                            }
+                            long writeStart = profile ? System.nanoTime() : 0L;
                             output.writeTo(writer);
-                            outputStream.write('\n');
+                            TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                            if (profile) {
+                                TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                            }
                         }
                     } catch (ExpressionException | TransformException e) {
                         stats.fail(i, "path", e.getMessage());
@@ -262,9 +284,17 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                             continue;
                         }
                         if (onError == TransformOptions.OnErrorMode.NULL) {
+                            long elementStart = profile ? System.nanoTime() : 0L;
                             IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), keepOriginalFields, pathSegments);
+                            if (profile) {
+                                TransformProfiler.addTransformNs(System.nanoTime() - elementStart);
+                            }
+                            long writeStart = profile ? System.nanoTime() : 0L;
                             output.writeTo(writer);
-                            outputStream.write('\n');
+                            TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                            if (profile) {
+                                TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                            }
                         }
                     }
                 }
@@ -295,7 +325,8 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
                 TransformTaskSupport.bufferedOutput(outputPath));
-                 IonWriter writer = IonValueUtils.system().newTextWriter(outputStream)) {
+                 IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
+                boolean profile = TransformProfiler.isEnabled();
                 Iterator<IonValue> iterator = IonValueUtils.system().iterate(stream);
                 int index = 0;
                 while (iterator.hasNext()) {
@@ -311,7 +342,8 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                                 expressionEngine,
                                 stats,
                                 writer,
-                                outputStream
+                                outputStream,
+                                profile
                             );
                         }
                     } else {
@@ -324,7 +356,8 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                             expressionEngine,
                             stats,
                             writer,
-                            outputStream
+                            outputStream,
+                            profile
                         );
                     }
                 }
@@ -344,11 +377,16 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                                     DefaultExpressionEngine expressionEngine,
                                     StatsAccumulator stats,
                                     IonWriter writer,
-                                    OutputStream outputStream) throws TransformException, IOException {
+                                    OutputStream outputStream,
+                                    boolean profile) throws TransformException, IOException {
         IonStruct record = asStruct(value);
         stats.processed++;
         try {
+            long transformStart = profile ? System.nanoTime() : 0L;
             IonValue evaluated = expressionEngine.evaluate(pathExpr, record);
+            if (profile) {
+                TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
+            }
             if (IonValueUtils.isNull(evaluated)) {
                 return index + 1;
             }
@@ -359,9 +397,17 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                 return index + 1;
             }
             for (IonValue element : list) {
+                long elementStart = profile ? System.nanoTime() : 0L;
                 IonStruct output = buildOutputRecord(record, asField, element, keepOriginalFields, pathSegments);
+                if (profile) {
+                    TransformProfiler.addTransformNs(System.nanoTime() - elementStart);
+                }
+                long writeStart = profile ? System.nanoTime() : 0L;
                 output.writeTo(writer);
-                outputStream.write('\n');
+                TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                if (profile) {
+                    TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                }
             }
         } catch (ExpressionException | TransformException e) {
             stats.fail(index, "path", e.getMessage());
@@ -373,9 +419,17 @@ public class Unnest extends Task implements RunnableTask<Unnest.Output> {
                 return index + 1;
             }
             if (onError == TransformOptions.OnErrorMode.NULL) {
+                long elementStart = profile ? System.nanoTime() : 0L;
                 IonStruct output = buildOutputRecord(record, asField, IonValueUtils.nullValue(), keepOriginalFields, pathSegments);
+                if (profile) {
+                    TransformProfiler.addTransformNs(System.nanoTime() - elementStart);
+                }
+                long writeStart = profile ? System.nanoTime() : 0L;
                 output.writeTo(writer);
-                outputStream.write('\n');
+                TransformTaskSupport.writeDelimiter(outputStream, outputFormat);
+                if (profile) {
+                    TransformProfiler.addWriteNs(System.nanoTime() - writeStart);
+                }
             }
         }
         return index + 1;
