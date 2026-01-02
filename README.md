@@ -3,12 +3,12 @@
 Typed, streaming-friendly transform tasks for Kestra using Amazon Ion.
 
 ## Tasks
+- `io.kestra.plugin.transform.Select`: align N inputs by position + optional filter + projection
 - `io.kestra.plugin.transform.Map`: project/rename/cast fields
 - `io.kestra.plugin.transform.Unnest`: explode array fields into rows
 - `io.kestra.plugin.transform.Filter`: keep/drop records by boolean expression
 - `io.kestra.plugin.transform.Aggregate`: group-by and typed aggregates
 - `io.kestra.plugin.transform.Zip`: merge multiple record streams by position
-- `io.kestra.plugin.transform.Select`: align N inputs by position + optional filter + projection
 
 ## Input and output
 Most tasks accept:
@@ -41,6 +41,37 @@ Experimental output format (`outputFormat`):
 - `TIMESTAMP` supports Ion timestamps and ISO-8601 strings (`parseTimestamp` can convert strings).
 
 ## Tasks (reference + examples)
+
+### Select (`io.kestra.plugin.transform.Select`)
+Use this when you want "Zip + optional Filter + Map" in one streaming operator: align inputs, filter rows, and project/cast output fields.
+
+Common config:
+- `inputs`: list of inputs (1+)
+- `where`: optional boolean expression (supports `$1`, `$2`, ...)
+- `fields`: Map-style definitions (shorthand or `{ expr, type, optional }`)
+- `onLengthMismatch`: `FAIL | SKIP` (when inputs are different lengths)
+- `onError`: `FAIL | SKIP | KEEP` (KEEP emits the original merged row)
+
+Example: enrich orders with scores and output typed columns
+```yaml
+- id: select
+  type: io.kestra.plugin.transform.Select
+  inputs:
+    - "{{ outputs.orders.values.records }}"
+    - "{{ outputs.scores.values.records }}"
+  where: $1.amount > 100 && $2.score > 0.8
+  fields:
+    order_id:
+      expr: $1.order_id
+      type: INT
+    amount:
+      expr: $1.amount
+      type: DECIMAL
+    score:
+      expr: $2.score
+      type: DECIMAL
+  output: RECORDS
+```
 
 ### Map (`io.kestra.plugin.transform.Map`)
 Use this when you want to normalize records into a typed schema: rename fields, compute derived fields, and cast values (without scripts).
@@ -170,37 +201,6 @@ Example: merge two record streams by row position
     - "{{ outputs.left.values.records }}"
     - "{{ outputs.right.values.records }}"
   onConflict: RIGHT
-```
-
-### Select (`io.kestra.plugin.transform.Select`)
-Use this when you want "Zip + optional Filter + Map" in one streaming operator: align inputs, filter rows, and project/cast output fields.
-
-Common config:
-- `inputs`: list of inputs (1+)
-- `where`: optional boolean expression (supports `$1`, `$2`, ...)
-- `fields`: Map-style definitions (shorthand or `{ expr, type, optional }`)
-- `onLengthMismatch`: `FAIL | SKIP` (when inputs are different lengths)
-- `onError`: `FAIL | SKIP | KEEP` (KEEP emits the original merged row)
-
-Example: enrich orders with scores and output typed columns
-```yaml
-- id: select
-  type: io.kestra.plugin.transform.Select
-  inputs:
-    - "{{ outputs.orders.values.records }}"
-    - "{{ outputs.scores.values.records }}"
-  where: $1.amount > 100 && $2.score > 0.8
-  fields:
-    order_id:
-      expr: $1.order_id
-      type: INT
-    amount:
-      expr: $1.amount
-      type: DECIMAL
-    score:
-      expr: $2.score
-      type: DECIMAL
-  output: RECORDS
 ```
 
 ## Examples index
