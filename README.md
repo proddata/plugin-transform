@@ -27,60 +27,6 @@ Experimental output format (`outputFormat`):
 - `TEXT` (default): newline-delimited Ion text
 - `BINARY`: Ion binary output (only readable by transform tasks; use TEXT as final step)
 
-## Common properties
-- `from`: input records or storage URI (all tasks except Zip/Select)
-- `output`: `AUTO | RECORDS | STORE`
-- `onError`: error handling; varies by task (see below)
-
-## Task reference
-
-Map (`io.kestra.plugin.transform.Map`)
-- `from`, `fields`
-- `keepOriginalFields` (default `false`): keep input fields not mapped by target name
-- `dropNulls` (default `true`): drop null fields from output
-- `onError` (default `FAIL`): `FAIL | SKIP | NULL`
-- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
-- Outputs: `records` or `uri`
-
-Unnest (`io.kestra.plugin.transform.Unnest`)
-- `from`, `path`, `as`
-- `keepOriginalFields` (default `true`): keep original fields except the exploded array field
-- `onError` (default `FAIL`): `FAIL | SKIP | NULL`
-- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
-- Outputs: `records` or `uri`
-
-Filter (`io.kestra.plugin.transform.Filter`)
-- `from`, `where`
-- `onError` (default `FAIL`): `FAIL | SKIP | KEEP`
-- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
-- Outputs: `records` or `uri`
-
-Aggregate (`io.kestra.plugin.transform.Aggregate`)
-- `from`, `groupBy`, `aggregates`
-- `onError` (default `FAIL`): `FAIL | SKIP | NULL`
-- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
-- Outputs: `records` or `uri`
-
-Zip (`io.kestra.plugin.transform.Zip`)
-- `inputs` (list of inputs)
-- `onError` (default `FAIL`): `FAIL | SKIP`
-- `onConflict` (default `FAIL`): `FAIL | LEFT | RIGHT`
-- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
-- `output`: `AUTO` stores if any input is a storage URI
-- Outputs: `records` or `uri`
-
-Select (`io.kestra.plugin.transform.Select`)
-- `inputs` (list of inputs), optional `where`, optional `fields`
-- Positional references: `$1.field`, `$2.field`, ... (unqualified fields resolve from merged row)
-- `fields` supports Map-style definitions: shorthand `field: expr` or full `{ expr, type, optional }`
-- `keepOriginalFields` (default `false`): when `fields` is provided, include merged row fields too
-- `dropNulls` (default `true`): drop null fields from output
-- `onLengthMismatch` (default `FAIL`): `FAIL | SKIP`
-- `onError` (default `FAIL`): `FAIL | SKIP | KEEP`
-- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
-- `output`: `AUTO` stores if any input is a storage URI
-- Outputs: `records` or `uri`
-
 ## Expression language (v1)
 - Field access: `user.id`
 - Nested: `user.address.city`
@@ -94,8 +40,18 @@ Select (`io.kestra.plugin.transform.Select`)
 - If `type` is omitted, the evaluated Ion value is passed through.
 - `TIMESTAMP` supports Ion timestamps and ISO-8601 strings (`parseTimestamp` can convert strings).
 
-## Examples
-Map with casting and error handling:
+## Tasks (reference + examples)
+
+### Map (`io.kestra.plugin.transform.Map`)
+Use this when you want to normalize records into a typed schema: rename fields, compute derived fields, and cast values (without scripts).
+
+Common config:
+- `fields`: shorthand `field: expr` or full `{ expr, type, optional }`
+- `keepOriginalFields`: keep input fields not mapped by target name
+- `dropNulls`: drop null fields from output
+- `onError`: `FAIL | SKIP | NULL` (NULL sets failing fields to null)
+
+Example: normalize API records into typed columns
 ```yaml
 - id: normalize
   type: io.kestra.plugin.transform.Map
@@ -118,13 +74,41 @@ Map with casting and error handling:
 ```
 Note: `keepOriginalFields` keeps input fields not mapped by name; mapping `a_new: a` still keeps the original `a`.
 
-Unnest + Filter + Map:
+### Unnest (`io.kestra.plugin.transform.Unnest`)
+Use this when you want to explode an array field into multiple rows (one per element), similar to "UNNEST" in SQL.
+
+Common config:
+- `path`: array path to explode (e.g. `items[]`)
+- `as`: field name that receives the element value
+- `keepOriginalFields`: keep original fields except the exploded array field
+
+Example: explode items into one row per item
 ```yaml
 - id: explode_items
   type: io.kestra.plugin.transform.Unnest
   from: "{{ outputs.fetch.records }}"
   path: items[]
   as: item
+```
+
+### Filter (`io.kestra.plugin.transform.Filter`)
+Use this when you want to keep/drop records based on a boolean expression, like a SQL `WHERE`.
+
+Common config:
+- `where`: boolean expression evaluated per record
+- `onError`: `FAIL | SKIP | KEEP` (KEEP keeps the record if `where` fails)
+
+Example: keep only expensive items
+```yaml
+- id: expensive_items
+  type: io.kestra.plugin.transform.Filter
+  from: "{{ outputs.explode_items.records }}"
+  where: item.price > 10
+```
+
+### Map + Unnest + Filter (pipeline example)
+Users often combine these to go from nested API responses to a clean, typed table-like stream.
+```yaml
 
 - id: expensive_items
   type: io.kestra.plugin.transform.Filter
@@ -143,7 +127,14 @@ Unnest + Filter + Map:
 ```
 Note: Unnest drops the exploded array field (`items` here) while keeping other fields.
 
-Aggregate totals:
+### Aggregate (`io.kestra.plugin.transform.Aggregate`)
+Use this when you want typed group-by aggregates (count/sum/min/max) without exporting to a database.
+
+Common config:
+- `groupBy`: list of fields that form the group key
+- `aggregates`: Map-style definitions `{ expr, type, optional }` (type optional)
+
+Example: compute per-customer totals
 ```yaml
 - id: totals
   type: io.kestra.plugin.transform.Aggregate
@@ -164,6 +155,54 @@ Aggregate totals:
   onError: FAIL
 ```
 
+### Zip (`io.kestra.plugin.transform.Zip`)
+Use this when you have multiple sources already aligned by row order and want to merge them positionally (record i with record i).
+
+Common config:
+- `inputs`: list of inputs (2+)
+- `onConflict`: `FAIL | LEFT | RIGHT` when two inputs have the same field name
+
+Example: merge two record streams by row position
+```yaml
+- id: zip
+  type: io.kestra.plugin.transform.Zip
+  inputs:
+    - "{{ outputs.left.values.records }}"
+    - "{{ outputs.right.values.records }}"
+  onConflict: RIGHT
+```
+
+### Select (`io.kestra.plugin.transform.Select`)
+Use this when you want "Zip + optional Filter + Map" in one streaming operator: align inputs, filter rows, and project/cast output fields.
+
+Common config:
+- `inputs`: list of inputs (1+)
+- `where`: optional boolean expression (supports `$1`, `$2`, ...)
+- `fields`: Map-style definitions (shorthand or `{ expr, type, optional }`)
+- `onLengthMismatch`: `FAIL | SKIP` (when inputs are different lengths)
+- `onError`: `FAIL | SKIP | KEEP` (KEEP emits the original merged row)
+
+Example: enrich orders with scores and output typed columns
+```yaml
+- id: select
+  type: io.kestra.plugin.transform.Select
+  inputs:
+    - "{{ outputs.orders.values.records }}"
+    - "{{ outputs.scores.values.records }}"
+  where: $1.amount > 100 && $2.score > 0.8
+  fields:
+    order_id:
+      expr: $1.order_id
+      type: INT
+    amount:
+      expr: $1.amount
+      type: DECIMAL
+    score:
+      expr: $2.score
+      type: DECIMAL
+  output: RECORDS
+```
+
 ## Examples index
 - `examples/api_to_typed_records.yml`: normalize API output into typed fields
 - `examples/http_download_transform.yml`: download products, unnest, map, and store
@@ -171,7 +210,7 @@ Aggregate totals:
 - `examples/dummyjson_carts_flow.yml`: compute max product total per cart and filter
 - `examples/dummyjson_users_flow.yml`: unnest users, map, filter
 - `examples/aggregate_totals.yml`: group and aggregate totals
-- `examples/zip_basic.yml`: zip two record streams by position
+- `examples/zip_basic.yml`: zip record streams by position
 
 More flows live in `examples/`.
 
