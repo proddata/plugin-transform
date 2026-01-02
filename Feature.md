@@ -162,7 +162,7 @@ The Select task aligns N record streams by position and then optionally filters 
   - `fields` (optional): output field name -> field definition.
   - Supports Map-style field definitions: shorthand `field: expr` or full `{ expr, type, optional }` (type optional).
   - If `fields` is omitted, output defaults to the merged row.
-  - `keepOriginalFields` controls whether the merged row is kept when projecting.
+  - `keepInputFields` controls which input fields are kept when projecting (1-based input indices).
 
 - **Error handling**
   - `onLengthMismatch: FAIL | SKIP`

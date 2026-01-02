@@ -53,6 +53,7 @@ Common config:
 - `inputs`: list of inputs (1+)
 - `where`: optional boolean expression (supports `$1`, `$2`, ...)
 - `fields`: Map-style definitions (shorthand or `{ expr, type, optional }`)
+- `keepInputFields`: optional list of input indices to copy into output when `fields` is set (e.g. `[1]` keeps only `$1` fields)
 - `onLengthMismatch`: `FAIL | SKIP` (when inputs are different lengths)
 - `onError`: `FAIL | SKIP | KEEP` (KEEP emits the original merged row)
 

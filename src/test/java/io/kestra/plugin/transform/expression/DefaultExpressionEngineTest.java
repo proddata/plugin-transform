@@ -20,6 +20,17 @@ class DefaultExpressionEngineTest {
         return new BigDecimal(value.toString());
     }
 
+    private static void assertInvalid(DefaultExpressionEngine engine, IonStruct record, String expression, String causeContains) {
+        ExpressionException exception = Assertions.assertThrows(
+            ExpressionException.class,
+            () -> engine.evaluate(expression, record)
+        );
+
+        assertThat(exception.getMessage(), containsString("Invalid expression: " + expression));
+        assertThat(exception.getCause() != null, is(true));
+        assertThat(exception.getCause().getMessage(), containsString(causeContains));
+    }
+
     @Test
     void returnsNullForBlankExpression() throws Exception {
         DefaultExpressionEngine engine = new DefaultExpressionEngine();
@@ -292,5 +303,24 @@ class DefaultExpressionEngineTest {
         Map<?, ?> cache = (Map<?, ?>) cacheField.get(engine);
 
         assertThat(cache.size(), is(2));
+    }
+
+    @Test
+    void rejectsInvalidInputs() {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertInvalid(engine, record, "(", "Unexpected token");
+        assertInvalid(engine, record, "1 + 2)", "Unexpected token");
+        assertInvalid(engine, record, "user..id", "Expected identifier after '.'");
+        assertInvalid(engine, record, "user[foo]", "Expected ']' or string key after '['");
+        assertInvalid(engine, record, "user[", "Expected ']' or string key after '['");
+        assertInvalid(engine, record, "user[\"x\"", "Expected ']'");
+        assertInvalid(engine, record, "sum(1 2)", "Expected ')'");
+        assertInvalid(engine, record, "sum(,)", "Unexpected token");
+        assertInvalid(engine, record, "1..2", "Invalid number literal");
+        assertInvalid(engine, record, "@", "Unexpected character");
+        assertInvalid(engine, record, "toInt()", "Expected 1 arguments");
+        assertInvalid(engine, record, "toInt(1, 2)", "Expected 1 arguments");
     }
 }

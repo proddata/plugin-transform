@@ -37,7 +37,5 @@ tasks:
       optional_missing:
         expr: missing
         optional: true
-    keepOriginalFields: false
     dropNulls: true
     output: RECORDS
-

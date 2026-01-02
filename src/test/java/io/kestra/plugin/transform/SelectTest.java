@@ -114,14 +114,14 @@ class SelectTest {
     }
 
     @Test
-    void keepOriginalFieldsAddsProjectionOnTop() throws Exception {
+    void keepInputFieldsAddsProjectionOnTop() throws Exception {
         List<Map<String, Object>> left = List.of(Map.of("a", 1));
         List<Map<String, Object>> right = List.of(Map.of("b", 2));
 
         Select task = Select.builder()
             .inputs(List.of(Property.ofValue(left), Property.ofValue(right)))
             .fields(Map.of("sum", Select.FieldDefinition.from("a + b")))
-            .keepOriginalFields(true)
+            .keepInputFields(List.of(1, 2))
             .build();
 
         RunContext runContext = runContextFactory.of(Map.of());
@@ -134,14 +134,13 @@ class SelectTest {
     }
 
     @Test
-    void keepOriginalFieldsFalseDropsUnprojectedFields() throws Exception {
+    void keepInputFieldsOmittedDropsUnprojectedFields() throws Exception {
         List<Map<String, Object>> left = List.of(Map.of("a", 1, "extra", "x"));
         List<Map<String, Object>> right = List.of(Map.of("b", 2));
 
         Select task = Select.builder()
             .inputs(List.of(Property.ofValue(left), Property.ofValue(right)))
             .fields(Map.of("a", Select.FieldDefinition.from("a")))
-            .keepOriginalFields(false)
             .build();
 
         RunContext runContext = runContextFactory.of(Map.of());

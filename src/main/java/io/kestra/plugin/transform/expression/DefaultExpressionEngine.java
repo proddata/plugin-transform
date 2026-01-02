@@ -27,7 +27,8 @@ public final class DefaultExpressionEngine implements ExpressionEngine {
             Expr compiled = cache.computeIfAbsent(expression, this::compile);
             return compiled.eval(new EvalContext(record));
         } catch (IllegalArgumentException e) {
-            throw new ExpressionException("Invalid expression: " + expression, e.getCause());
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new ExpressionException("Invalid expression: " + expression, cause);
         }
     }
 
@@ -847,8 +848,12 @@ public final class DefaultExpressionEngine implements ExpressionEngine {
 
         private Expr parseNumber(Token token) {
             String raw = token.text();
-            BigDecimal decimal = new BigDecimal(raw);
-            return new LiteralExpr(IonValueUtils.system().newDecimal(decimal));
+            try {
+                BigDecimal decimal = new BigDecimal(raw);
+                return new LiteralExpr(IonValueUtils.system().newDecimal(decimal));
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(new ExpressionException("Invalid number literal: " + raw, e));
+            }
         }
 
         private Expr parsePath(String first) throws ExpressionException {

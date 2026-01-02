@@ -94,12 +94,12 @@ public class Select extends Task implements RunnableTask<Select.Output> {
     )
     private java.util.Map<String, FieldDefinition> fields;
 
-    @Builder.Default
     @Schema(
-        title = "Keep original fields",
-        description = "When fields are provided, include the merged row fields in addition to projected fields."
+        title = "Keep input fields",
+        description = "When fields are provided, include the selected input fields (1-based indices) in addition to projected fields."
     )
-    private boolean keepOriginalFields = false;
+    @Builder.Default
+    private List<Integer> keepInputFields = List.of();
 
     @Builder.Default
     @Schema(title = "Drop null fields")
@@ -206,7 +206,7 @@ public class Select extends Task implements RunnableTask<Select.Output> {
                 IonStruct mergedFlat = mergeFlat(sourceRows);
                 IonStruct evalContext = needsPositionalContext ? buildEvalContext(mergedFlat, sourceRows) : mergedFlat;
 
-                IonStruct outputRow = processRow(whereExpr, mergedFlat, evalContext, expressionEngine, caster, stats);
+                IonStruct outputRow = processRow(whereExpr, sourceRows, mergedFlat, evalContext, expressionEngine, caster, stats);
                 if (outputRow == null) {
                     continue;
                 }
@@ -237,7 +237,7 @@ public class Select extends Task implements RunnableTask<Select.Output> {
                     IonStruct mergedFlat = mergeFlat(sourceRows);
                     IonStruct evalContext = needsPositionalContext ? buildEvalContext(mergedFlat, sourceRows) : mergedFlat;
 
-                    IonStruct outputRow = processRow(whereExpr, mergedFlat, evalContext, expressionEngine, caster, stats);
+                    IonStruct outputRow = processRow(whereExpr, sourceRows, mergedFlat, evalContext, expressionEngine, caster, stats);
                     if (profile) {
                         TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
                     }
@@ -260,6 +260,7 @@ public class Select extends Task implements RunnableTask<Select.Output> {
     }
 
     private IonStruct processRow(String whereExpr,
+                                 List<IonStruct> sourceRows,
                                  IonStruct mergedFlat,
                                  IonStruct evalContext,
                                  DefaultExpressionEngine expressionEngine,
@@ -300,7 +301,7 @@ public class Select extends Task implements RunnableTask<Select.Output> {
             }
         }
 
-        IonStruct projected = projectRow(mergedFlat, evalContext, expressionEngine, caster, stats);
+        IonStruct projected = projectRow(sourceRows, mergedFlat, evalContext, expressionEngine, caster, stats);
         if (projected == null) {
             return null;
         }
@@ -311,7 +312,8 @@ public class Select extends Task implements RunnableTask<Select.Output> {
         return projected;
     }
 
-    private IonStruct projectRow(IonStruct mergedFlat,
+    private IonStruct projectRow(List<IonStruct> sourceRows,
+                                 IonStruct mergedFlat,
                                  IonStruct evalContext,
                                  DefaultExpressionEngine expressionEngine,
                                  DefaultIonCaster caster,
@@ -320,9 +322,9 @@ public class Select extends Task implements RunnableTask<Select.Output> {
             return cloneStruct(mergedFlat);
         }
 
-        IonStruct output = keepOriginalFields
-            ? cloneStruct(mergedFlat)
-            : IonValueUtils.system().newEmptyStruct();
+        IonStruct output = keepInputFields == null || keepInputFields.isEmpty()
+            ? IonValueUtils.system().newEmptyStruct()
+            : mergeSelectedInputs(sourceRows);
 
         for (java.util.Map.Entry<String, FieldDefinition> entry : fields.entrySet()) {
             String targetField = entry.getKey();
@@ -362,6 +364,23 @@ public class Select extends Task implements RunnableTask<Select.Output> {
             }
         }
         return output;
+    }
+
+    private IonStruct mergeSelectedInputs(List<IonStruct> sourceRows) throws TransformException {
+        IonStruct merged = IonValueUtils.system().newEmptyStruct();
+        for (Integer index : keepInputFields) {
+            if (index == null) {
+                throw new TransformException("keepInputFields must not contain null");
+            }
+            if (index < 1 || index > sourceRows.size()) {
+                throw new TransformException("keepInputFields contains out-of-range index: " + index);
+            }
+            IonStruct record = sourceRows.get(index - 1);
+            for (IonValue value : record) {
+                merged.put(value.getFieldName(), IonValueUtils.cloneValue(value));
+            }
+        }
+        return merged;
     }
 
     private Boolean evaluateBoolean(String whereExpr,

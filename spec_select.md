@@ -82,7 +82,7 @@ fields:                      # projection mapping (optional)
   <targetField>: { expr: <expr>, optional: true } # allow missing/null
   ...
 
-keepOriginalFields: false | true   # default false
+keepInputFields: []                # default [] (1-based input indices)
 dropNulls: true | false            # default true
 
 onLengthMismatch: FAIL | SKIP      # default FAIL
@@ -129,8 +129,8 @@ If fields is provided:
 If fields is omitted:
 	•	Output defaults to merged (flattened last-wins object)
 
-If keepOriginalFields=true:
-	•	projected fields are added on top of merged
+If keepInputFields is non-empty:
+	•	projected fields are added on top of the merged selection of those inputs (in the configured order)
 
 If dropNulls=true:
 	•	null fields are removed from output
@@ -187,7 +187,7 @@ fields:
   amount: $1.amount
   score: $3.score
 
-keepOriginalFields: false
+keepInputFields: []
 
 
 ⸻
