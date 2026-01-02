@@ -41,15 +41,16 @@ import java.util.UUID;
 @NoArgsConstructor
 @Schema(
     title = "Zip records",
-    description = "Merge two record streams by position (record i with record i)."
+    description = "Merge multiple record streams by position (record i with record i)."
 )
 @Plugin(
     examples = {
         @io.kestra.core.models.annotations.Example(
-            title = "Zip records from two sources",
+            title = "Zip records from multiple sources",
             code = {
-                "left: \"{{ outputs.left.records }}\"",
-                "right: \"{{ outputs.right.records }}\"",
+                "inputs:",
+                "  - \"{{ outputs.left.records }}\"",
+                "  - \"{{ outputs.right.records }}\"",
                 "onConflict: RIGHT"
             }
         )
@@ -62,16 +63,10 @@ import java.util.UUID;
 )
 public class Zip extends Task implements RunnableTask<Zip.Output> {
     @Schema(
-        title = "Left records",
-        description = "Ion list or struct to zip, or a storage URI pointing to an Ion file."
+        title = "Input records",
+        description = "List of inputs (Ion list/struct or storage URIs) to align by row position."
     )
-    private Property<Object> left;
-
-    @Schema(
-        title = "Right records",
-        description = "Ion list or struct to zip, or a storage URI pointing to an Ion file."
-    )
-    private Property<Object> right;
+    private List<Property<Object>> inputs;
 
     @Builder.Default
     @Schema(title = "On error behavior")
@@ -97,17 +92,26 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        TransformTaskSupport.ResolvedInput leftInput = TransformTaskSupport.resolveInput(runContext, left);
-        TransformTaskSupport.ResolvedInput rightInput = TransformTaskSupport.resolveInput(runContext, right);
+        if (inputs == null || inputs.size() < 2) {
+            throw new TransformException("inputs must contain at least two elements");
+        }
+
+        List<TransformTaskSupport.ResolvedInput> resolvedInputs = new ArrayList<>(inputs.size());
+        boolean anyFromStorage = false;
+        for (Property<Object> input : inputs) {
+            TransformTaskSupport.ResolvedInput resolved = TransformTaskSupport.resolveInput(runContext, input);
+            resolvedInputs.add(resolved);
+            anyFromStorage = anyFromStorage || resolved.fromStorage();
+        }
 
         OutputMode effectiveOutput = output == OutputMode.AUTO
-            ? ((leftInput.fromStorage() || rightInput.fromStorage()) ? OutputMode.STORE : OutputMode.RECORDS)
+            ? (anyFromStorage ? OutputMode.STORE : OutputMode.RECORDS)
             : output;
 
         StatsAccumulator stats = new StatsAccumulator();
 
-        if (effectiveOutput == OutputMode.STORE && (leftInput.fromStorage() || rightInput.fromStorage())) {
-            URI storedUri = zipStreamToStorage(runContext, leftInput, rightInput, stats);
+        if (effectiveOutput == OutputMode.STORE && anyFromStorage) {
+            URI storedUri = zipStreamToStorage(runContext, resolvedInputs, stats);
             runContext.metric(Counter.of("processed", stats.processed))
                 .metric(Counter.of("failed", stats.failed))
                 .metric(Counter.of("dropped", stats.dropped));
@@ -116,15 +120,14 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
                 .build();
         }
 
-        List<IonStruct> leftRecords = TransformTaskSupport.normalizeRecords(resolveInMemory(runContext, leftInput));
-        List<IonStruct> rightRecords = TransformTaskSupport.normalizeRecords(resolveInMemory(runContext, rightInput));
-        if (leftRecords.size() != rightRecords.size()) {
-            throw new TransformException("left and right inputs must have same length: left="
-                + leftRecords.size() + ", right=" + rightRecords.size());
+        List<List<IonStruct>> inputRecords = new ArrayList<>(resolvedInputs.size());
+        for (TransformTaskSupport.ResolvedInput resolved : resolvedInputs) {
+            inputRecords.add(TransformTaskSupport.normalizeRecords(resolveInMemory(runContext, resolved)));
         }
+        validateSameLength(inputRecords);
 
         if (effectiveOutput == OutputMode.STORE) {
-            URI storedUri = storeRecords(runContext, leftRecords, rightRecords, stats);
+            URI storedUri = storeRecords(runContext, inputRecords, stats);
             runContext.metric(Counter.of("processed", stats.processed))
                 .metric(Counter.of("failed", stats.failed))
                 .metric(Counter.of("dropped", stats.dropped));
@@ -133,7 +136,7 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
                 .build();
         }
 
-        List<Object> rendered = zipToRecords(leftRecords, rightRecords, stats);
+        List<Object> rendered = zipToRecords(inputRecords, stats);
         runContext.metric(Counter.of("processed", stats.processed))
             .metric(Counter.of("failed", stats.failed))
             .metric(Counter.of("dropped", stats.dropped));
@@ -149,16 +152,14 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
         return TransformTaskSupport.loadIonFromStorage(runContext, resolvedInput.storageUri());
     }
 
-    private List<Object> zipToRecords(List<IonStruct> leftRecords,
-                                      List<IonStruct> rightRecords,
+    private List<Object> zipToRecords(List<List<IonStruct>> inputRecords,
                                       StatsAccumulator stats) throws TransformException {
         List<Object> outputRecords = new ArrayList<>();
-        for (int i = 0; i < leftRecords.size(); i++) {
+        int length = inputRecords.getFirst().size();
+        for (int i = 0; i < length; i++) {
             stats.processed++;
-            IonStruct leftRecord = leftRecords.get(i);
-            IonStruct rightRecord = rightRecords.get(i);
             try {
-                IonStruct merged = mergeRecords(leftRecord, rightRecord);
+                IonStruct merged = mergeRecords(rowAt(inputRecords, i));
                 outputRecords.add(IonValueUtils.toJavaValue(merged));
             } catch (TransformException e) {
                 stats.failed++;
@@ -174,8 +175,7 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
     }
 
     private URI storeRecords(RunContext runContext,
-                             List<IonStruct> leftRecords,
-                             List<IonStruct> rightRecords,
+                             List<List<IonStruct>> inputRecords,
                              StatsAccumulator stats) throws TransformException {
         String name = "zip-" + UUID.randomUUID() + ".ion";
         try {
@@ -184,13 +184,12 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
                 TransformTaskSupport.bufferedOutput(outputPath));
                  IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
                 boolean profile = TransformProfiler.isEnabled();
-                for (int i = 0; i < leftRecords.size(); i++) {
+                int length = inputRecords.getFirst().size();
+                for (int i = 0; i < length; i++) {
                     stats.processed++;
-                    IonStruct leftRecord = leftRecords.get(i);
-                    IonStruct rightRecord = rightRecords.get(i);
                     try {
                         long transformStart = profile ? System.nanoTime() : 0L;
-                        IonStruct merged = mergeRecords(leftRecord, rightRecord);
+                        IonStruct merged = mergeRecords(rowAt(inputRecords, i));
                         if (profile) {
                             TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
                         }
@@ -218,32 +217,23 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
     }
 
     private URI zipStreamToStorage(RunContext runContext,
-                                   TransformTaskSupport.ResolvedInput leftInput,
-                                   TransformTaskSupport.ResolvedInput rightInput,
+                                   List<TransformTaskSupport.ResolvedInput> inputs,
                                    StatsAccumulator stats) throws TransformException {
         String name = "zip-" + UUID.randomUUID() + ".ion";
-        try (RecordCursor leftCursor = openCursor(runContext, leftInput);
-             RecordCursor rightCursor = openCursor(runContext, rightInput)) {
+        try (MultiCursor cursor = openCursors(runContext, inputs)) {
             java.nio.file.Path outputPath = runContext.workingDir().createTempFile(".ion");
             try (OutputStream outputStream = TransformTaskSupport.wrapCompression(
                 TransformTaskSupport.bufferedOutput(outputPath));
                  IonWriter writer = TransformTaskSupport.createWriter(outputStream, outputFormat)) {
                 boolean profile = TransformProfiler.isEnabled();
                 while (true) {
-                    boolean leftHas = leftCursor.hasNext();
-                    boolean rightHas = rightCursor.hasNext();
-                    if (!leftHas && !rightHas) {
+                    if (!cursor.hasAlignedNext()) {
                         break;
-                    }
-                    if (leftHas != rightHas) {
-                        throw new TransformException("left and right inputs must have same length");
                     }
                     stats.processed++;
                     try {
-                        IonStruct leftRecord = leftCursor.nextStruct();
-                        IonStruct rightRecord = rightCursor.nextStruct();
                         long transformStart = profile ? System.nanoTime() : 0L;
-                        IonStruct merged = mergeRecords(leftRecord, rightRecord);
+                        IonStruct merged = mergeRecords(cursor.nextRow());
                         if (profile) {
                             TransformProfiler.addTransformNs(System.nanoTime() - transformStart);
                         }
@@ -270,24 +260,32 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
         }
     }
 
-    private IonStruct mergeRecords(IonStruct leftRecord, IonStruct rightRecord) throws TransformException {
+    private IonStruct mergeRecords(List<IonStruct> records) throws TransformException {
         IonStruct merged = IonValueUtils.system().newEmptyStruct();
-        for (IonValue value : leftRecord) {
-            merged.put(value.getFieldName(), IonValueUtils.cloneValue(value));
-        }
-        for (IonValue value : rightRecord) {
-            String fieldName = value.getFieldName();
-            if (merged.get(fieldName) != null) {
-                if (onConflict == ConflictMode.FAIL) {
-                    throw new TransformException("Field conflict on '" + fieldName + "'");
+        for (IonStruct record : records) {
+            for (IonValue value : record) {
+                String fieldName = value.getFieldName();
+                if (merged.get(fieldName) != null) {
+                    if (onConflict == ConflictMode.FAIL) {
+                        throw new TransformException("Field conflict on '" + fieldName + "'");
+                    }
+                    if (onConflict == ConflictMode.LEFT) {
+                        continue;
+                    }
                 }
-                if (onConflict == ConflictMode.LEFT) {
-                    continue;
-                }
+                merged.put(fieldName, IonValueUtils.cloneValue(value));
             }
-            merged.put(fieldName, IonValueUtils.cloneValue(value));
         }
         return merged;
+    }
+
+    private MultiCursor openCursors(RunContext runContext,
+                                    List<TransformTaskSupport.ResolvedInput> inputs) throws TransformException {
+        List<RecordCursor> cursors = new ArrayList<>(inputs.size());
+        for (TransformTaskSupport.ResolvedInput input : inputs) {
+            cursors.add(openCursor(runContext, input));
+        }
+        return new MultiCursor(cursors);
     }
 
     private RecordCursor openCursor(RunContext runContext,
@@ -312,6 +310,30 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
             return RecordCursor.ofIterator(new PrependIterator(first, iterator), inputStream);
         } catch (IOException e) {
             throw new TransformException("Unable to read Ion file from storage: " + input.storageUri(), e);
+        }
+    }
+
+    private List<IonStruct> rowAt(List<List<IonStruct>> inputRecords, int index) {
+        List<IonStruct> row = new ArrayList<>(inputRecords.size());
+        for (List<IonStruct> records : inputRecords) {
+            row.add(records.get(index));
+        }
+        return row;
+    }
+
+    private void validateSameLength(List<List<IonStruct>> inputRecords) throws TransformException {
+        int expected = inputRecords.getFirst().size();
+        for (int i = 1; i < inputRecords.size(); i++) {
+            if (inputRecords.get(i).size() != expected) {
+                StringBuilder message = new StringBuilder("inputs must have same length: ");
+                for (int j = 0; j < inputRecords.size(); j++) {
+                    if (j > 0) {
+                        message.append(", ");
+                    }
+                    message.append("input").append(j + 1).append("=").append(inputRecords.get(j).size());
+                }
+                throw new TransformException(message.toString());
+            }
         }
     }
 
@@ -390,6 +412,49 @@ public class Zip extends Task implements RunnableTask<Zip.Output> {
                     if (e instanceof IOException ioException) {
                         throw ioException;
                     }
+                }
+            }
+        }
+    }
+
+    private static final class MultiCursor implements AutoCloseable {
+        private final List<RecordCursor> cursors;
+
+        private MultiCursor(List<RecordCursor> cursors) {
+            this.cursors = cursors;
+        }
+
+        boolean hasAlignedNext() throws TransformException {
+            boolean any = false;
+            boolean all = true;
+            for (RecordCursor cursor : cursors) {
+                boolean has = cursor.hasNext();
+                any = any || has;
+                all = all && has;
+            }
+            if (!any) {
+                return false;
+            }
+            if (!all) {
+                throw new TransformException("inputs must have same length");
+            }
+            return true;
+        }
+
+        List<IonStruct> nextRow() throws TransformException {
+            List<IonStruct> row = new ArrayList<>(cursors.size());
+            for (RecordCursor cursor : cursors) {
+                row.add(cursor.nextStruct());
+            }
+            return row;
+        }
+
+        @Override
+        public void close() {
+            for (RecordCursor cursor : cursors) {
+                try {
+                    cursor.close();
+                } catch (Exception ignored) {
                 }
             }
         }

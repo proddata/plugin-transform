@@ -33,8 +33,10 @@ class ZipTest {
         );
 
         Zip task = Zip.builder()
-            .left(Property.ofValue(left))
-            .right(Property.ofValue(right))
+            .inputs(List.of(
+                Property.ofValue(left),
+                Property.ofValue(right)
+            ))
             .build();
 
         RunContext runContext = runContextFactory.of(Map.of());
@@ -55,8 +57,10 @@ class ZipTest {
         List<Map<String, Object>> right = List.of(Map.of("status", "ok"), Map.of("status", "fail"));
 
         Zip task = Zip.builder()
-            .left(Property.ofValue(left))
-            .right(Property.ofValue(right))
+            .inputs(List.of(
+                Property.ofValue(left),
+                Property.ofValue(right)
+            ))
             .build();
 
         RunContext runContext = runContextFactory.of(Map.of());
@@ -65,7 +69,7 @@ class ZipTest {
             () -> task.run(runContext)
         );
 
-        assertThat(exception.getMessage(), is("left and right inputs must have same length: left=1, right=2"));
+        assertThat(exception.getMessage(), is("inputs must have same length: input1=1, input2=2"));
     }
 
     @Test
@@ -74,8 +78,10 @@ class ZipTest {
         List<Map<String, Object>> right = List.of(Map.of("status", "ok"));
 
         Zip task = Zip.builder()
-            .left(Property.ofValue(left))
-            .right(Property.ofValue(right))
+            .inputs(List.of(
+                Property.ofValue(left),
+                Property.ofValue(right)
+            ))
             .onConflict(Zip.ConflictMode.RIGHT)
             .build();
 
@@ -92,8 +98,10 @@ class ZipTest {
         List<Map<String, Object>> right = List.of(Map.of("id", "b"));
 
         Zip task = Zip.builder()
-            .left(Property.ofValue(left))
-            .right(Property.ofValue(right))
+            .inputs(List.of(
+                Property.ofValue(left),
+                Property.ofValue(right)
+            ))
             .onError(TransformOptions.OnErrorMode.SKIP)
             .onConflict(Zip.ConflictMode.FAIL)
             .build();

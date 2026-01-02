@@ -20,5 +20,6 @@ tasks:
 
   - id: zip
     type: io.kestra.plugin.transform.Zip
-    left: "{{ outputs.left.values.records }}"
-    right: "{{ outputs.right.values.records }}"
+    inputs:
+      - "{{ outputs.left.values.records }}"
+      - "{{ outputs.right.values.records }}"

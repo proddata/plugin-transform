@@ -543,6 +543,9 @@ public final class DefaultExpressionEngine implements ExpressionEngine {
                 return new Token(TokenType.EOF, "");
             }
             char current = input.charAt(index);
+            if (current == '$' && index + 1 < input.length() && Character.isDigit(input.charAt(index + 1))) {
+                return readPositionalIdentifier();
+            }
             if (Character.isLetter(current) || current == '_') {
                 return readIdentifier();
             }
@@ -603,6 +606,15 @@ public final class DefaultExpressionEngine implements ExpressionEngine {
                 if (!Character.isLetterOrDigit(current) && current != '_') {
                     break;
                 }
+                index++;
+            }
+            return new Token(TokenType.IDENT, input.substring(start, index));
+        }
+
+        private Token readPositionalIdentifier() {
+            int start = index;
+            index++; // '$'
+            while (index < input.length() && Character.isDigit(input.charAt(index))) {
                 index++;
             }
             return new Token(TokenType.IDENT, input.substring(start, index));

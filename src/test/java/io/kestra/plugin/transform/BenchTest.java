@@ -52,13 +52,25 @@ class BenchTest {
         Path reportPath = benchDir.resolve("report.md");
 
         try (BufferedWriter writer = Files.newBufferedWriter(reportPath, StandardCharsets.UTF_8)) {
-            List<String> throughputRows = new ArrayList<>();
-            List<String> mapProfileRows = new ArrayList<>();
-            List<String> unnestProfileRows = new ArrayList<>();
-            List<String> filterProfileRows = new ArrayList<>();
-            List<String> aggregateProfileRows = new ArrayList<>();
-            List<String> zipProfileRows = new ArrayList<>();
+            java.util.Map<String, java.util.Map<Integer, BenchResult>> resultsByScenario = new java.util.LinkedHashMap<>();
+            java.util.Map<String, java.util.Map<Integer, ProfileResult>> profilesByScenario = new java.util.LinkedHashMap<>();
             boolean profileEnabled = isProfileEnabled();
+
+            List<Scenario> scenarios = List.of(
+                new Scenario("read", "Read", (context, uri) -> runReadOnly(context, uri), true),
+                new Scenario("copy", "Copy", (context, uri) -> runCopy(context, uri, compression, outputFormat), true),
+                new Scenario("map", "Map", (context, uri) -> runMap(context, uri, outputFormat), true),
+                new Scenario("unnest", "Unnest", (context, uri) -> runUnnest(context, uri, outputFormat), true),
+                new Scenario("filter", "Filter", (context, uri) -> runFilter(context, uri, outputFormat), true),
+                new Scenario("aggregate", "Aggregate", (context, uri) -> runAggregate(context, uri, outputFormat), true),
+                new Scenario("zip", "Zip", (context, uri) -> runZip(context, uri, outputFormat), true),
+                new Scenario("select_zip_only", "Select (zip-only)", (context, uri) -> runSelectZipOnly(context, uri, outputFormat), true),
+                new Scenario("select_filter_only", "Select (filter-only)", (context, uri) -> runSelectFilterOnly(context, uri, outputFormat), true),
+                new Scenario("select_map_only", "Select (map-only)", (context, uri) -> runSelectMapOnly(context, uri, outputFormat), true),
+                new Scenario("select_combined", "Select (combined)", (context, uri) -> runSelectCombined(context, uri, outputFormat), true),
+                new Scenario("pipeline_zip_filter_map", "Pipeline (zip→filter→map)", (context, uri) -> runZipFilterMap(context, uri, outputFormat), true)
+            );
+
             writer.write("# Kestra transform benchmark\n\n");
             writer.write("- Records: " + formatCountList(recordCounts) + "\n");
             writer.write("- Format: " + format.name().toLowerCase(java.util.Locale.ROOT) + "\n");
@@ -66,137 +78,166 @@ class BenchTest {
             writer.write("- Profile: " + (profileEnabled ? "tasks" : "off") + "\n");
             writer.write("- Output format: " + outputFormat.name().toLowerCase(java.util.Locale.ROOT) + "\n");
             writer.write("- Output: build/bench\n\n");
-            writer.write("| Records | Input size | Generate (ms) | Read (ms) | Copy (ms) | Map (ms) | Unnest (ms) | Filter (ms) | Aggregate (ms) | Zip (ms) |\n");
-            writer.write("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+
+            java.util.Map<Integer, Long> inputBytesByRecordCount = new java.util.LinkedHashMap<>();
+            java.util.Map<Integer, String> inputSizeByRecordCount = new java.util.LinkedHashMap<>();
+            java.util.Map<Integer, GenerationResult> generationByRecordCount = new java.util.LinkedHashMap<>();
 
             for (int recordCount : recordCounts) {
                 Path inputPath = benchDir.resolve("input-" + recordCount + "." + format.fileExtension);
                 GenerationResult generation = ensureIonFile(inputPath, recordCount, format);
                 long inputBytes = generation.bytes();
+                inputBytesByRecordCount.put(recordCount, inputBytes);
+                inputSizeByRecordCount.put(recordCount, formatSize(inputBytes));
+                generationByRecordCount.put(recordCount, generation);
 
                 String inputUri = storeInput(runContext, inputPath);
 
-                BenchResult read = timeTaskWithMemory(() -> runReadOnly(runContext, inputUri));
-                BenchResult copy = timeTaskWithMemory(() -> runCopy(runContext, inputUri, compression, outputFormat));
-                BenchResult map = timeTaskWithMemory(() -> runMap(runContext, inputUri, outputFormat));
-                BenchResult unnest = timeTaskWithMemory(() -> runUnnest(runContext, inputUri, outputFormat));
-                BenchResult filter = timeTaskWithMemory(() -> runFilter(runContext, inputUri, outputFormat));
-                BenchResult aggregate = timeTaskWithMemory(() -> runAggregate(runContext, inputUri, outputFormat));
-                BenchResult zip = timeTaskWithMemory(() -> runZip(runContext, inputUri, outputFormat));
-                ProfileResult mapProfile = profileEnabled ? profileTask(() -> runMap(runContext, inputUri, outputFormat)) : null;
-                ProfileResult unnestProfile = profileEnabled ? profileTask(() -> runUnnest(runContext, inputUri, outputFormat)) : null;
-                ProfileResult filterProfile = profileEnabled ? profileTask(() -> runFilter(runContext, inputUri, outputFormat)) : null;
-                ProfileResult aggregateProfile = profileEnabled ? profileTask(() -> runAggregate(runContext, inputUri, outputFormat)) : null;
-                ProfileResult zipProfile = profileEnabled ? profileTask(() -> runZip(runContext, inputUri, outputFormat)) : null;
-                writer.write("| " + formatCount(generation.records())
-                    + " | " + formatSize(inputBytes)
-                    + " | " + formatDuration(generation.durationMs())
-                    + (generation.generated() ? "" : " (cached)")
-                    + " | " + formatDuration(read.durationMs)
-                    + " | " + formatDuration(copy.durationMs)
-                    + " | " + formatDuration(map.durationMs)
-                    + " | " + formatDuration(unnest.durationMs)
-                    + " | " + formatDuration(filter.durationMs)
-                    + " | " + formatDuration(aggregate.durationMs)
-                    + " | " + formatDuration(zip.durationMs)
-                    + " |\n");
-                throughputRows.add("| " + formatCount(generation.records())
-                    + " | " + formatSize(inputBytes)
-                    + " | " + formatThroughput(inputBytes, read.durationMs)
-                    + " | " + formatThroughput(inputBytes, copy.durationMs)
-                    + " | " + formatThroughput(inputBytes, map.durationMs)
-                    + " | " + formatThroughput(inputBytes, unnest.durationMs)
-                    + " | " + formatThroughput(inputBytes, filter.durationMs)
-                    + " | " + formatThroughput(inputBytes, aggregate.durationMs)
-                    + " | " + formatThroughput(inputBytes, zip.durationMs)
-                    + " | " + formatDeltaMiB(read)
-                    + " | " + formatDeltaMiB(copy)
-                    + " | " + formatDeltaMiB(map)
-                    + " | " + formatDeltaMiB(unnest)
-                    + " | " + formatDeltaMiB(filter)
-                    + " | " + formatDeltaMiB(aggregate)
-                    + " | " + formatDeltaMiB(zip)
-                    + " |\n");
-                if (mapProfile != null) {
-                    mapProfileRows.add("| " + formatCount(generation.records())
-                        + " | " + formatSize(inputBytes)
-                        + " | " + formatDuration(mapProfile.totalMs)
-                        + " | " + formatDuration(mapProfile.readMs)
-                        + " | " + formatDuration(mapProfile.transformMs)
-                        + " | " + formatDuration(mapProfile.writeMs)
-                        + " |\n");
+                for (Scenario scenario : scenarios) {
+                    BenchResult result = timeTaskWithMemory(() -> scenario.runner.run(runContext, inputUri));
+                    resultsByScenario.computeIfAbsent(scenario.id, ignored -> new java.util.LinkedHashMap<>())
+                        .put(recordCount, result);
+                    if (profileEnabled && scenario.profileable) {
+                        ProfileResult profile = profileTask(() -> scenario.runner.run(runContext, inputUri));
+                        profilesByScenario.computeIfAbsent(scenario.id, ignored -> new java.util.LinkedHashMap<>())
+                            .put(recordCount, profile);
+                    }
                 }
-                if (unnestProfile != null) {
-                    unnestProfileRows.add("| " + formatCount(generation.records())
-                        + " | " + formatSize(inputBytes)
-                        + " | " + formatDuration(unnestProfile.totalMs)
-                        + " | " + formatDuration(unnestProfile.readMs)
-                        + " | " + formatDuration(unnestProfile.transformMs)
-                        + " | " + formatDuration(unnestProfile.writeMs)
-                        + " |\n");
-                }
-                if (filterProfile != null) {
-                    filterProfileRows.add("| " + formatCount(generation.records())
-                        + " | " + formatSize(inputBytes)
-                        + " | " + formatDuration(filterProfile.totalMs)
-                        + " | " + formatDuration(filterProfile.readMs)
-                        + " | " + formatDuration(filterProfile.transformMs)
-                        + " | " + formatDuration(filterProfile.writeMs)
-                        + " |\n");
-                }
-                if (aggregateProfile != null) {
-                    aggregateProfileRows.add("| " + formatCount(generation.records())
-                        + " | " + formatSize(inputBytes)
-                        + " | " + formatDuration(aggregateProfile.totalMs)
-                        + " | " + formatDuration(aggregateProfile.readMs)
-                        + " | " + formatDuration(aggregateProfile.transformMs)
-                        + " | " + formatDuration(aggregateProfile.writeMs)
-                        + " |\n");
-                }
-                if (zipProfile != null) {
-                    zipProfileRows.add("| " + formatCount(generation.records())
-                        + " | " + formatSize(inputBytes)
-                        + " | " + formatDuration(zipProfile.totalMs)
-                        + " | " + formatDuration(zipProfile.readMs)
-                        + " | " + formatDuration(zipProfile.transformMs)
-                        + " | " + formatDuration(zipProfile.writeMs)
-                        + " |\n");
-                }
-                writer.flush();
             }
-            writer.write("\n| Records | Input size | Read MiB/s | Copy MiB/s | Map MiB/s | Unnest MiB/s | Filter MiB/s | Aggregate MiB/s | Zip MiB/s | Read ΔMiB | Copy ΔMiB | Map ΔMiB | Unnest ΔMiB | Filter ΔMiB | Aggregate ΔMiB | Zip ΔMiB |\n");
-            writer.write("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
-            for (String row : throughputRows) {
-                writer.write(row);
+
+            writer.write("## Input\n\n");
+            writeTransposedHeader(writer, "Metric", recordCounts);
+            writeTransposedSeparator(writer, recordCounts.size());
+            writeTransposedRow(writer, "Input size", recordCounts, count -> inputSizeByRecordCount.get(count));
+            writeTransposedRow(writer, "Generate (ms)", recordCounts, count -> {
+                GenerationResult generation = generationByRecordCount.get(count);
+                if (generation == null) {
+                    return "-";
+                }
+                return formatDuration(generation.durationMs()) + (generation.generated() ? "" : " (cached)");
+            });
+
+            writer.write("\n## Durations (ms)\n\n");
+            writeTransposedHeader(writer, "Task", recordCounts);
+            writeTransposedSeparator(writer, recordCounts.size());
+            for (Scenario scenario : scenarios) {
+                writeTransposedRow(writer, scenario.label, recordCounts, count -> {
+                    BenchResult result = getResult(resultsByScenario, scenario.id, count);
+                    return result == null ? "-" : formatDuration(result.durationMs);
+                });
             }
+
+            writer.write("\n## Throughput (MiB/s)\n\n");
+            writeTransposedHeader(writer, "Task", recordCounts);
+            writeTransposedSeparator(writer, recordCounts.size());
+            for (Scenario scenario : scenarios) {
+                writeTransposedRow(writer, scenario.label, recordCounts, count -> {
+                    BenchResult result = getResult(resultsByScenario, scenario.id, count);
+                    Long bytes = inputBytesByRecordCount.get(count);
+                    if (result == null || bytes == null) {
+                        return "-";
+                    }
+                    return formatThroughput(bytes, result.durationMs);
+                });
+            }
+
+            writer.write("\n## Memory Delta (MiB)\n\n");
+            writeTransposedHeader(writer, "Task", recordCounts);
+            writeTransposedSeparator(writer, recordCounts.size());
+            for (Scenario scenario : scenarios) {
+                writeTransposedRow(writer, scenario.label, recordCounts, count -> {
+                    BenchResult result = getResult(resultsByScenario, scenario.id, count);
+                    return result == null ? "-" : formatDeltaMiB(result);
+                });
+            }
+
             if (profileEnabled) {
-                writer.write("\n| Records | Input size | Map total (ms) | Map read/parse (ms) | Map transform (ms) | Map write (ms) |\n");
-                writer.write("| --- | --- | --- | --- | --- | --- |\n");
-                for (String row : mapProfileRows) {
-                    writer.write(row);
-                }
-                writer.write("\n| Records | Input size | Unnest total (ms) | Unnest read/parse (ms) | Unnest transform (ms) | Unnest write (ms) |\n");
-                writer.write("| --- | --- | --- | --- | --- | --- |\n");
-                for (String row : unnestProfileRows) {
-                    writer.write(row);
-                }
-                writer.write("\n| Records | Input size | Filter total (ms) | Filter read/parse (ms) | Filter transform (ms) | Filter write (ms) |\n");
-                writer.write("| --- | --- | --- | --- | --- | --- |\n");
-                for (String row : filterProfileRows) {
-                    writer.write(row);
-                }
-                writer.write("\n| Records | Input size | Aggregate total (ms) | Aggregate read/parse (ms) | Aggregate transform (ms) | Aggregate write (ms) |\n");
-                writer.write("| --- | --- | --- | --- | --- | --- |\n");
-                for (String row : aggregateProfileRows) {
-                    writer.write(row);
-                }
-                writer.write("\n| Records | Input size | Zip total (ms) | Zip read/parse (ms) | Zip transform (ms) | Zip write (ms) |\n");
-                writer.write("| --- | --- | --- | --- | --- | --- |\n");
-                for (String row : zipProfileRows) {
-                    writer.write(row);
+                writer.write("\n## Profile (ms)\n\n");
+                writeTransposedHeader(writer, "Task · phase", recordCounts);
+                writeTransposedSeparator(writer, recordCounts.size());
+                for (Scenario scenario : scenarios) {
+                    if (!scenario.profileable) {
+                        continue;
+                    }
+                    writeTransposedRow(writer, scenario.label + " · total", recordCounts, count -> formatProfile(profilesByScenario, scenario.id, count, Phase.TOTAL));
+                    writeTransposedRow(writer, scenario.label + " · read/parse", recordCounts, count -> formatProfile(profilesByScenario, scenario.id, count, Phase.READ));
+                    writeTransposedRow(writer, scenario.label + " · transform", recordCounts, count -> formatProfile(profilesByScenario, scenario.id, count, Phase.TRANSFORM));
+                    writeTransposedRow(writer, scenario.label + " · write", recordCounts, count -> formatProfile(profilesByScenario, scenario.id, count, Phase.WRITE));
                 }
             }
         }
+    }
+
+    private BenchResult getResult(java.util.Map<String, java.util.Map<Integer, BenchResult>> resultsByScenario,
+                                  String scenarioId,
+                                  int recordCount) {
+        java.util.Map<Integer, BenchResult> perCount = resultsByScenario.get(scenarioId);
+        if (perCount == null) {
+            return null;
+        }
+        return perCount.get(recordCount);
+    }
+
+    private enum Phase {
+        TOTAL,
+        READ,
+        TRANSFORM,
+        WRITE
+    }
+
+    private String formatProfile(java.util.Map<String, java.util.Map<Integer, ProfileResult>> profilesByScenario,
+                                 String scenarioId,
+                                 int recordCount,
+                                 Phase phase) {
+        java.util.Map<Integer, ProfileResult> perCount = profilesByScenario.get(scenarioId);
+        if (perCount == null) {
+            return "-";
+        }
+        ProfileResult profile = perCount.get(recordCount);
+        if (profile == null) {
+            return "-";
+        }
+        return switch (phase) {
+            case TOTAL -> formatDuration(profile.totalMs);
+            case READ -> formatDuration(profile.readMs);
+            case TRANSFORM -> formatDuration(profile.transformMs);
+            case WRITE -> formatDuration(profile.writeMs);
+        };
+    }
+
+    private void writeTransposedHeader(BufferedWriter writer, String firstColumnLabel, List<Integer> recordCounts) throws IOException {
+        writer.write("| " + firstColumnLabel);
+        for (Integer count : recordCounts) {
+            writer.write(" | " + formatCount(count));
+        }
+        writer.write(" |\n");
+    }
+
+    private void writeTransposedSeparator(BufferedWriter writer, int recordCountColumns) throws IOException {
+        writer.write("| ---");
+        for (int i = 0; i < recordCountColumns; i++) {
+            writer.write(" | ---");
+        }
+        writer.write(" |\n");
+    }
+
+    private void writeTransposedRow(BufferedWriter writer,
+                                    String rowLabel,
+                                    List<Integer> recordCounts,
+                                    java.util.function.Function<Integer, String> valueForRecordCount) throws IOException {
+        writer.write("| " + rowLabel);
+        for (Integer count : recordCounts) {
+            String value = valueForRecordCount.apply(count);
+            writer.write(" | " + (value == null ? "-" : value));
+        }
+        writer.write(" |\n");
+    }
+
+    private record Scenario(String id, String label, ScenarioRunner runner, boolean profileable) {
+    }
+
+    private interface ScenarioRunner {
+        void run(RunContext runContext, String uri) throws Exception;
     }
 
     private List<Integer> parseRecordCounts() {
@@ -407,13 +448,99 @@ class BenchTest {
 
     private void runZip(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
         Zip task = Zip.builder()
-            .left(Property.ofValue(uri))
-            .right(Property.ofValue(uri))
+            .inputs(List.of(
+                Property.ofValue(uri),
+                Property.ofValue(uri)
+            ))
             .onConflict(Zip.ConflictMode.RIGHT)
             .output(Zip.OutputMode.STORE)
             .outputFormat(outputFormat)
             .build();
         task.run(runContext);
+    }
+
+    private void runSelectZipOnly(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
+        Select task = Select.builder()
+            .inputs(List.of(
+                Property.ofValue(uri),
+                Property.ofValue(uri)
+            ))
+            .output(Select.OutputMode.STORE)
+            .outputFormat(outputFormat)
+            .build();
+        task.run(runContext);
+    }
+
+    private void runSelectFilterOnly(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
+        Select task = Select.builder()
+            .inputs(List.of(Property.ofValue(uri)))
+            .where(Property.ofValue("active"))
+            .output(Select.OutputMode.STORE)
+            .outputFormat(outputFormat)
+            .build();
+        task.run(runContext);
+    }
+
+    private void runSelectMapOnly(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
+        Select task = Select.builder()
+            .inputs(List.of(Property.ofValue(uri)))
+            .fields(Map.of(
+                "customer_id", Select.FieldDefinition.builder().expr("customer_id").type(IonTypeName.STRING).build(),
+                "total_spent", Select.FieldDefinition.builder().expr("total_spent").type(IonTypeName.DECIMAL).build()
+            ))
+            .output(Select.OutputMode.STORE)
+            .outputFormat(outputFormat)
+            .build();
+        task.run(runContext);
+    }
+
+    private void runSelectCombined(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
+        Select task = Select.builder()
+            .inputs(List.of(
+                Property.ofValue(uri),
+                Property.ofValue(uri)
+            ))
+            .where(Property.ofValue("$1.active && $2.active"))
+            .fields(Map.of(
+                "customer_id", Select.FieldDefinition.builder().expr("customer_id").type(IonTypeName.STRING).build(),
+                "total_spent", Select.FieldDefinition.builder().expr("total_spent").type(IonTypeName.DECIMAL).build()
+            ))
+            .output(Select.OutputMode.STORE)
+            .outputFormat(outputFormat)
+            .build();
+        task.run(runContext);
+    }
+
+    private void runZipFilterMap(RunContext runContext, String uri, io.kestra.plugin.transform.util.OutputFormat outputFormat) throws Exception {
+        Zip zip = Zip.builder()
+            .inputs(List.of(
+                Property.ofValue(uri),
+                Property.ofValue(uri)
+            ))
+            .onConflict(Zip.ConflictMode.RIGHT)
+            .output(Zip.OutputMode.STORE)
+            .outputFormat(outputFormat)
+            .build();
+        Zip.Output zipped = zip.run(runContext);
+
+        Filter filter = Filter.builder()
+            .from(Property.ofValue(zipped.getUri()))
+            .where(Property.ofValue("active"))
+            .output(Filter.OutputMode.STORE)
+            .outputFormat(outputFormat)
+            .build();
+        Filter.Output filtered = filter.run(runContext);
+
+        io.kestra.plugin.transform.Map map = io.kestra.plugin.transform.Map.builder()
+            .from(Property.ofValue(filtered.getUri()))
+            .output(io.kestra.plugin.transform.Map.OutputMode.STORE)
+            .outputFormat(outputFormat)
+            .fields(Map.of(
+                "customer_id", io.kestra.plugin.transform.Map.FieldDefinition.builder().expr("customer_id").type(IonTypeName.STRING).build(),
+                "total_spent", io.kestra.plugin.transform.Map.FieldDefinition.builder().expr("total_spent").type(IonTypeName.DECIMAL).build()
+            ))
+            .build();
+        map.run(runContext);
     }
 
     private long timeTask(ThrowingRunnable runnable) throws Exception {

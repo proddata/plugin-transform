@@ -32,8 +32,13 @@ This document explains how the transform tasks are organized and how the core cl
   - Groups records and computes aggregates.
   - Uses incremental aggregation state to avoid retaining all records per group.
 - `src/main/java/io/kestra/plugin/transform/Zip.java`
-  - Zips two record streams by position and merges their fields.
+  - Zips multiple record streams by position and merges their fields.
   - Supports conflict handling and output modes.
+
+- `src/main/java/io/kestra/plugin/transform/Select.java`
+  - Aligns N record streams by position, optionally filters rows, and projects output fields.
+  - Exposes positional input scopes via `$1`, `$2`, ... inside expressions.
+  - Supports Map-style typed field definitions (optional casting via `DefaultIonCaster`).
 
 ### Expression Layer
 
@@ -42,6 +47,7 @@ This document explains how the transform tasks are organized and how the core cl
 
 - `src/main/java/io/kestra/plugin/transform/expression/DefaultExpressionEngine.java`
   - Expression parser + evaluator for v1 (field access, math, boolean logic, array expansion).
+  - Supports positional identifiers like `$1`, `$2`, ... for tasks that inject them into the record scope.
   - Built-in functions (`sum`, `count`, `min`, `max`, `coalesce`, etc.).
   - Produces Ion values, not strings.
 
@@ -119,7 +125,7 @@ This document explains how the transform tasks are organized and how the core cl
 ## Connection Diagram (Conceptual)
 
 ```
-Map/Unnest/Filter/Aggregate/Zip
+Map/Unnest/Filter/Aggregate/Zip/Select
   -> DefaultTransformTaskEngine (Map only)
   -> DefaultRecordTransformer (Map only)
   -> DefaultExpressionEngine

@@ -7,11 +7,16 @@ Typed, streaming-friendly transform tasks for Kestra using Amazon Ion.
 - `io.kestra.plugin.transform.Unnest`: explode array fields into rows
 - `io.kestra.plugin.transform.Filter`: keep/drop records by boolean expression
 - `io.kestra.plugin.transform.Aggregate`: group-by and typed aggregates
-- `io.kestra.plugin.transform.Zip`: merge two record streams by position
+- `io.kestra.plugin.transform.Zip`: merge multiple record streams by position
+- `io.kestra.plugin.transform.Select`: align N inputs by position + optional filter + projection
 
 ## Input and output
-All tasks accept:
+Most tasks accept:
 - `from`: in-memory records (map/list/Ion) or a storage URI (`kestra://...`)
+
+Multi-input tasks:
+- `Zip`: `inputs` (list)
+- `Select`: `inputs` (list)
 
 Output mode (`output`) supports:
 - `AUTO` (default): STORE if `from` is a storage URI, else RECORDS
@@ -23,7 +28,7 @@ Experimental output format (`outputFormat`):
 - `BINARY`: Ion binary output (only readable by transform tasks; use TEXT as final step)
 
 ## Common properties
-- `from`: input records or storage URI (all tasks except Zip)
+- `from`: input records or storage URI (all tasks except Zip/Select)
 - `output`: `AUTO | RECORDS | STORE`
 - `onError`: error handling; varies by task (see below)
 
@@ -57,11 +62,23 @@ Aggregate (`io.kestra.plugin.transform.Aggregate`)
 - Outputs: `records` or `uri`
 
 Zip (`io.kestra.plugin.transform.Zip`)
-- `left`, `right`
+- `inputs` (list of inputs)
 - `onError` (default `FAIL`): `FAIL | SKIP`
 - `onConflict` (default `FAIL`): `FAIL | LEFT | RIGHT`
 - `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
-- `output`: `AUTO` stores if either side is a storage URI
+- `output`: `AUTO` stores if any input is a storage URI
+- Outputs: `records` or `uri`
+
+Select (`io.kestra.plugin.transform.Select`)
+- `inputs` (list of inputs), optional `where`, optional `fields`
+- Positional references: `$1.field`, `$2.field`, ... (unqualified fields resolve from merged row)
+- `fields` supports Map-style definitions: shorthand `field: expr` or full `{ expr, type, optional }`
+- `keepOriginalFields` (default `false`): when `fields` is provided, include merged row fields too
+- `dropNulls` (default `true`): drop null fields from output
+- `onLengthMismatch` (default `FAIL`): `FAIL | SKIP`
+- `onError` (default `FAIL`): `FAIL | SKIP | KEEP`
+- `outputFormat` (default `TEXT`): experimental `TEXT | BINARY` (binary only readable by transform tasks; use TEXT as final step)
+- `output`: `AUTO` stores if any input is a storage URI
 - Outputs: `records` or `uri`
 
 ## Expression language (v1)
