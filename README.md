@@ -31,9 +31,12 @@ Experimental output format (`outputFormat`):
 - Field access: `user.id`
 - Nested: `user.address.city`
 - Arrays: `items[].price`
+- Brackets (for keys with spaces): `user["first name"]`
 - Comparisons: `> < == != >= <=`
 - Boolean: `&& || !`
 - Functions: `sum`, `count`, `min`, `max`, `avg`, `first`, `last`, `coalesce`, `concat`, `toInt`, `toDecimal`, `toString`, `toBoolean`, `parseTimestamp`
+
+Cheat sheet: `docs/EXPRESSION_CHEATSHEET.md`
 
 ## Type casting
 - `type` is optional in Map/Aggregate definitions.

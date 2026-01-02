@@ -821,9 +821,18 @@ public final class DefaultExpressionEngine implements ExpressionEngine {
             segments.add(segment);
             while (true) {
                 if (match(TokenType.LBRACKET)) {
-                    consume(TokenType.RBRACKET, "Expected ']'");
-                    segment.setArrayExpand(true);
-                    continue;
+                    if (match(TokenType.RBRACKET)) {
+                        segment.setArrayExpand(true);
+                        continue;
+                    }
+                    if (match(TokenType.STRING)) {
+                        String fieldName = previous().text();
+                        consume(TokenType.RBRACKET, "Expected ']'");
+                        segment = new PathSegment(fieldName);
+                        segments.add(segment);
+                        continue;
+                    }
+                    throw new ExpressionException("Expected ']' or string key after '['");
                 }
                 if (match(TokenType.DOT)) {
                     consume(TokenType.IDENT, "Expected identifier after '.'");
