@@ -12,6 +12,7 @@ import java.util.Map;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.hasSize;
 
 @KestraTest(startRunner = true)
 class MapFlowTest {
@@ -121,5 +122,90 @@ class MapFlowTest {
         Object uri = outputs.get("uri");
         assertThat(uri != null, is(true));
         assertThat(uri.toString().startsWith("kestra://"), is(true));
+    }
+
+    @Test
+    @ExecuteFlow("flows/select_flow.yaml")
+    void executesSelectFlow(Execution execution) {
+        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+
+        TaskRun taskRun = execution.findTaskRunsByTaskId("select").getFirst();
+        Map<String, Object> outputs = (Map<String, Object>) taskRun.getOutputs();
+        List<Map<String, Object>> records = (List<Map<String, Object>>) outputs.get("records");
+
+        assertThat(records, hasSize(1));
+        Map<String, Object> record = records.getFirst();
+        assertThat(((Number) record.get("order_id")).longValue(), is(1L));
+        assertThat(new java.math.BigDecimal(record.get("amount").toString()).compareTo(new java.math.BigDecimal("120.00")), is(0));
+        assertThat(new java.math.BigDecimal(record.get("score").toString()).compareTo(new java.math.BigDecimal("0.91")), is(0));
+        assertThat(record.containsKey("optional_missing"), is(false));
+    }
+
+    @Test
+    @ExecuteFlow("flows/select_flow_store.yaml")
+    void executesSelectStoreFlow(Execution execution) {
+        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+
+        TaskRun selectRun = execution.findTaskRunsByTaskId("select").getFirst();
+        Map<String, Object> selectOutputs = (Map<String, Object>) selectRun.getOutputs();
+        assertThat(selectOutputs.containsKey("records"), is(false));
+        Object uri = selectOutputs.get("uri");
+        assertThat(uri != null, is(true));
+        assertThat(uri.toString().startsWith("kestra://"), is(true));
+
+        TaskRun readBackRun = execution.findTaskRunsByTaskId("read_back").getFirst();
+        Map<String, Object> readBackOutputs = (Map<String, Object>) readBackRun.getOutputs();
+        List<Map<String, Object>> records = (List<Map<String, Object>>) readBackOutputs.get("records");
+        assertThat(records, hasSize(2));
+        assertThat(((Number) records.getFirst().get("a")).longValue(), is(1L));
+        assertThat(((Number) records.getFirst().get("b")).longValue(), is(10L));
+        assertThat(((Number) records.get(1).get("a")).longValue(), is(2L));
+        assertThat(((Number) records.get(1).get("b")).longValue(), is(20L));
+    }
+
+    @Test
+    @ExecuteFlow("flows/select_flow_binary.yaml")
+    void executesSelectBinaryStoreFlow(Execution execution) {
+        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+
+        TaskRun selectRun = execution.findTaskRunsByTaskId("select").getFirst();
+        Map<String, Object> selectOutputs = (Map<String, Object>) selectRun.getOutputs();
+        Object uri = selectOutputs.get("uri");
+        assertThat(uri != null, is(true));
+        assertThat(uri.toString().startsWith("kestra://"), is(true));
+
+        TaskRun readBackRun = execution.findTaskRunsByTaskId("read_back").getFirst();
+        Map<String, Object> readBackOutputs = (Map<String, Object>) readBackRun.getOutputs();
+        List<Map<String, Object>> records = (List<Map<String, Object>>) readBackOutputs.get("records");
+        assertThat(records, hasSize(1));
+        assertThat(((Number) records.getFirst().get("a")).longValue(), is(1L));
+        assertThat(((Number) records.getFirst().get("b")).longValue(), is(2L));
+    }
+
+    @Test
+    @ExecuteFlow("flows/select_flow_length_mismatch_skip.yaml")
+    void executesSelectLengthMismatchSkipFlow(Execution execution) {
+        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+
+        TaskRun taskRun = execution.findTaskRunsByTaskId("select").getFirst();
+        Map<String, Object> outputs = (Map<String, Object>) taskRun.getOutputs();
+        List<Map<String, Object>> records = (List<Map<String, Object>>) outputs.get("records");
+
+        assertThat(records, hasSize(1));
+        assertThat(records.getFirst().get("id"), is("a"));
+        assertThat(records.getFirst().get("status"), is("ok"));
+    }
+
+    @Test
+    @ExecuteFlow("flows/select_flow_onerror_keep.yaml")
+    void executesSelectOnErrorKeepFlow(Execution execution) {
+        assertThat(execution.getState().getCurrent(), is(State.Type.SUCCESS));
+
+        TaskRun taskRun = execution.findTaskRunsByTaskId("select").getFirst();
+        Map<String, Object> outputs = (Map<String, Object>) taskRun.getOutputs();
+        List<Map<String, Object>> records = (List<Map<String, Object>>) outputs.get("records");
+
+        assertThat(records, hasSize(1));
+        assertThat(records.getFirst().get("total_spent"), is("not-a-number"));
     }
 }
