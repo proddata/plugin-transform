@@ -6,11 +6,20 @@ import io.kestra.plugin.transform.ion.IonValueUtils;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
+import java.lang.reflect.Field;
+import java.util.Map;
+
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 
 class DefaultExpressionEngineTest {
+    private static BigDecimal evalDecimal(DefaultExpressionEngine engine, String expression, IonStruct record) throws Exception {
+        Object value = IonValueUtils.toJavaValue(engine.evaluate(expression, record));
+        return new BigDecimal(value.toString());
+    }
+
     @Test
     void returnsNullForBlankExpression() throws Exception {
         DefaultExpressionEngine engine = new DefaultExpressionEngine();
@@ -85,5 +94,203 @@ class DefaultExpressionEngineTest {
         IonValue value = engine.evaluate("$1[\"field name\"]", record);
 
         assertThat(IonValueUtils.toJavaValue(value), is(1L));
+    }
+
+    @Test
+    void respectsArithmeticPrecedence() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertThat(evalDecimal(engine, "1 + 2 * 3", record).compareTo(new BigDecimal("7")), is(0));
+        assertThat(evalDecimal(engine, "(1 + 2) * 3", record).compareTo(new BigDecimal("9")), is(0));
+        assertThat(evalDecimal(engine, "10 / 2 + 3", record).compareTo(new BigDecimal("8")), is(0));
+    }
+
+    @Test
+    void respectsBooleanPrecedence() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("true || false && false", record)), is(true));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("(true || false) && false", record)), is(false));
+    }
+
+    @Test
+    void shortCircuitsBooleanOperators() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("false && missingFn(1)", record)), is(false));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("true || missingFn(1)", record)), is(true));
+    }
+
+    @Test
+    void respectsOperatorAssociativity() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertThat(evalDecimal(engine, "10 - 5 - 1", record).compareTo(new BigDecimal("4")), is(0));
+        assertThat(evalDecimal(engine, "100 / 10 / 2", record).compareTo(new BigDecimal("5")), is(0));
+    }
+
+    @Test
+    void handlesNestedParentheses() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertThat(evalDecimal(engine, "((1 + 2) * (3 + 4))", record).compareTo(new BigDecimal("21")), is(0));
+    }
+
+    @Test
+    void supportsMixedPrecedenceAcrossOperators() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("1 + 2 * 3 == 7", record)), is(true));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("1 + 2 * 3 > 6", record)), is(true));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("!(1 + 2 * 3 > 6)", record)), is(false));
+    }
+
+    @Test
+    void nullPropagationAndEquality() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("null == null", record)), is(true));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("null != null", record)), is(false));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("null == 1", record)), is(false));
+        assertThat(IonValueUtils.isNull(engine.evaluate("null > 1", record)), is(true));
+        assertThat(IonValueUtils.isNull(engine.evaluate("1 + null", record)), is(true));
+    }
+
+    @Test
+    void nullPropagationForBooleanOperators() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertThat(IonValueUtils.isNull(engine.evaluate("null && true", record)), is(true));
+        assertThat(IonValueUtils.isNull(engine.evaluate("null || false", record)), is(true));
+
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("false && null", record)), is(false));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("true || null", record)), is(true));
+
+        assertThat(IonValueUtils.isNull(engine.evaluate("true && null", record)), is(true));
+        assertThat(IonValueUtils.isNull(engine.evaluate("false || null", record)), is(true));
+
+        assertThat(IonValueUtils.isNull(engine.evaluate("null && missingFn(1)", record)), is(true));
+        assertThat(IonValueUtils.isNull(engine.evaluate("null || missingFn(1)", record)), is(true));
+    }
+
+    @Test
+    void divisionByZeroReturnsNull() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertThat(IonValueUtils.isNull(engine.evaluate("1 / 0", record)), is(true));
+    }
+
+    @Test
+    void supportsStringEscapes() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("\"a\\\\b\"", record)), is("a\\b"));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("\"a\\\"b\"", record)), is("a\"b"));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("\"a\\nb\"", record)), is("a\nb"));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("\"a\\tb\"", record)), is("a\tb"));
+    }
+
+    @Test
+    void rejectsInvalidEscapeSequence() {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        ExpressionException exception = Assertions.assertThrows(
+            ExpressionException.class,
+            () -> engine.evaluate("\"\\x\"", record)
+        );
+
+        assertThat(exception.getMessage(), containsString("Invalid expression"));
+        assertThat(exception.getCause() != null, is(true));
+        assertThat(exception.getCause().getMessage(), containsString("Invalid escape sequence"));
+    }
+
+    @Test
+    void rejectsUnterminatedStringLiteral() {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        ExpressionException exception = Assertions.assertThrows(
+            ExpressionException.class,
+            () -> engine.evaluate("\"abc", record)
+        );
+
+        assertThat(exception.getMessage(), containsString("Invalid expression"));
+        assertThat(exception.getCause() != null, is(true));
+        assertThat(exception.getCause().getMessage(), containsString("Unterminated string literal"));
+    }
+
+    @Test
+    void expandsArraysAndPreservesNullsInResult() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        IonStruct item1 = IonValueUtils.system().newEmptyStruct();
+        item1.put("price", IonValueUtils.system().newInt(1));
+        IonStruct item2 = IonValueUtils.system().newEmptyStruct();
+        IonStruct item3 = IonValueUtils.system().newEmptyStruct();
+        item3.put("price", IonValueUtils.system().newInt(3));
+
+        var items = IonValueUtils.system().newEmptyList();
+        items.add(item1);
+        items.add(item2);
+        items.add(item3);
+        record.put("items", items);
+
+        IonValue value = engine.evaluate("items[].price", record);
+        assertThat(IonValueUtils.toJavaValue(value).toString(), is("[1, null, 3]"));
+        assertThat(IonValueUtils.toJavaValue(engine.evaluate("sum(items[].price)", record)).toString(), is("4"));
+    }
+
+    @Test
+    void supportsNestedArrayExpansion() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+
+        IonStruct line1 = IonValueUtils.system().newEmptyStruct();
+        line1.put("price", IonValueUtils.system().newInt(1));
+        var lines1 = IonValueUtils.system().newEmptyList();
+        lines1.add(line1);
+
+        IonStruct order1 = IonValueUtils.system().newEmptyStruct();
+        order1.put("lines", lines1);
+
+        IonStruct order2 = IonValueUtils.system().newEmptyStruct();
+        order2.put("lines", IonValueUtils.system().newEmptyList());
+
+        var orders = IonValueUtils.system().newEmptyList();
+        orders.add(order1);
+        orders.add(order2);
+        record.put("orders", orders);
+
+        IonValue value = engine.evaluate("orders[].lines[].price", record);
+        assertThat(IonValueUtils.toJavaValue(value).toString(), is("[[1], []]"));
+    }
+
+    @Test
+    void cachesCompiledExpressions() throws Exception {
+        DefaultExpressionEngine engine = new DefaultExpressionEngine();
+        IonStruct record = IonValueUtils.system().newEmptyStruct();
+        record.put("a", IonValueUtils.system().newInt(1));
+
+        engine.evaluate("a + 1", record);
+        engine.evaluate("a + 1", record);
+        engine.evaluate("a + 2", record);
+
+        Field cacheField = DefaultExpressionEngine.class.getDeclaredField("cache");
+        cacheField.setAccessible(true);
+        Map<?, ?> cache = (Map<?, ?>) cacheField.get(engine);
+
+        assertThat(cache.size(), is(2));
     }
 }

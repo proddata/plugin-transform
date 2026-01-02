@@ -27,11 +27,9 @@ Experimental output format (`outputFormat`):
 - `TEXT` (default): newline-delimited Ion text
 - `BINARY`: Ion binary output (only readable by transform tasks; use TEXT as final step)
 
-## Expression language (v1)
-- Field access: `user.id`
-- Nested: `user.address.city`
+## Expression language
+- Field access: `user.address.city` or `user["first name"]`
 - Arrays: `items[].price`
-- Brackets (for keys with spaces): `user["first name"]`
 - Comparisons: `> < == != >= <=`
 - Boolean: `&& || !`
 - Functions: `sum`, `count`, `min`, `max`, `avg`, `first`, `last`, `coalesce`, `concat`, `toInt`, `toDecimal`, `toString`, `toBoolean`, `parseTimestamp`

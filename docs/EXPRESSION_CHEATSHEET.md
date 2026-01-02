@@ -17,7 +17,7 @@ Unqualified fields resolve against the merged/default scope (last input wins on 
 ## Literals
 
 - Numbers: `1`, `12.5`
-- Strings: `"hello"`
+- Strings: `"hello"` (supports escapes like `\"`, `\\`, `\n`, `\t`)
 - Booleans: `true`, `false`
 - Null: `null`
 
@@ -45,4 +45,5 @@ Unqualified fields resolve against the merged/default scope (last input wins on 
 
 - `items[].price` produces a list; functions like `sum`/`min`/`max` expect a list argument.
 - Bracket syntax uses double quotes inside the expression: `record["field name"]`. In YAML you’ll usually wrap the whole expression in single quotes.
-
+- `&&` and `||` are short-circuiting; if the left side is enough to decide, the right side isn’t evaluated.
+- Boolean nulls propagate: `null && true` and `null || false` both return `null`.

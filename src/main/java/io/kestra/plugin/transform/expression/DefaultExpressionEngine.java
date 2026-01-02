@@ -195,11 +195,11 @@ public final class DefaultExpressionEngine implements ExpressionEngine {
 
         @Override
         public IonValue eval(EvalContext context) throws ExpressionException {
+            if (operator == TokenType.AND_AND || operator == TokenType.OR_OR) {
+                return evaluateBoolean(context);
+            }
             IonValue leftValue = left.eval(context);
             IonValue rightValue = right.eval(context);
-            if (operator == TokenType.AND_AND || operator == TokenType.OR_OR) {
-                return evaluateBoolean(leftValue, rightValue);
-            }
             if (operator == TokenType.EQ_EQ || operator == TokenType.NOT_EQ) {
                 boolean equals = equalsValue(leftValue, rightValue);
                 return IonValueUtils.system().newBool(operator == TokenType.EQ_EQ ? equals : !equals);
@@ -213,11 +213,26 @@ public final class DefaultExpressionEngine implements ExpressionEngine {
             throw new ExpressionException("Unsupported operator: " + operator);
         }
 
-        private IonValue evaluateBoolean(IonValue leftValue, IonValue rightValue) throws ExpressionException {
-            if (IonValueUtils.isNull(leftValue) || IonValueUtils.isNull(rightValue)) {
+        private IonValue evaluateBoolean(EvalContext context) throws ExpressionException {
+            IonValue leftValue = left.eval(context);
+            if (IonValueUtils.isNull(leftValue)) {
                 return IonValueUtils.nullValue();
             }
             boolean leftBool = asBoolean(leftValue);
+            if (operator == TokenType.AND_AND) {
+                if (!leftBool) {
+                    return IonValueUtils.system().newBool(false);
+                }
+            } else {
+                if (leftBool) {
+                    return IonValueUtils.system().newBool(true);
+                }
+            }
+
+            IonValue rightValue = right.eval(context);
+            if (IonValueUtils.isNull(rightValue)) {
+                return IonValueUtils.nullValue();
+            }
             boolean rightBool = asBoolean(rightValue);
             boolean result = operator == TokenType.AND_AND ? (leftBool && rightBool) : (leftBool || rightBool);
             return IonValueUtils.system().newBool(result);
@@ -645,16 +660,37 @@ public final class DefaultExpressionEngine implements ExpressionEngine {
         }
 
         private Token readString() throws ExpressionException {
-            int start = ++index;
-            while (index < input.length() && input.charAt(index) != '"') {
+            index++; // opening quote
+            StringBuilder builder = new StringBuilder();
+            while (index < input.length()) {
+                char current = input.charAt(index);
+                if (current == '"') {
+                    index++;
+                    return new Token(TokenType.STRING, builder.toString());
+                }
+                if (current == '\\') {
+                    index++;
+                    if (index >= input.length()) {
+                        throw new ExpressionException("Unterminated string literal");
+                    }
+                    char escaped = input.charAt(index);
+                    builder.append(switch (escaped) {
+                        case '"', '\\', '/' -> escaped;
+                        case 'n' -> '\n';
+                        case 'r' -> '\r';
+                        case 't' -> '\t';
+                        default -> throw new ExpressionException("Invalid escape sequence: \\" + escaped);
+                    });
+                    index++;
+                    continue;
+                }
+                builder.append(current);
                 index++;
             }
             if (index >= input.length()) {
                 throw new ExpressionException("Unterminated string literal");
             }
-            String value = input.substring(start, index);
-            index++;
-            return new Token(TokenType.STRING, value);
+            throw new ExpressionException("Unterminated string literal");
         }
 
         private boolean peek(char expected) {
