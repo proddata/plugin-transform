@@ -42,7 +42,10 @@ Experimental output format (`outputFormat`):
 
 ## Tasks (reference + examples)
 
-### Select (`io.kestra.plugin.transform.Select`)
+### Select
+```yaml
+type: io.kestra.plugin.transform.Select
+```
 Use this when you want "Zip + optional Filter + Map" in one streaming operator: align inputs, filter rows, and project/cast output fields.
 
 Common config:
@@ -73,7 +76,10 @@ Example: enrich orders with scores and output typed columns
   output: RECORDS
 ```
 
-### Map (`io.kestra.plugin.transform.Map`)
+### Map
+```yaml
+type: io.kestra.plugin.transform.Map
+```
 Use this when you want to normalize records into a typed schema: rename fields, compute derived fields, and cast values (without scripts).
 
 Common config:
@@ -105,7 +111,10 @@ Example: normalize API records into typed columns
 ```
 Note: `keepOriginalFields` keeps input fields not mapped by name; mapping `a_new: a` still keeps the original `a`.
 
-### Unnest (`io.kestra.plugin.transform.Unnest`)
+### Unnest
+```yaml
+type: io.kestra.plugin.transform.Unnest
+```
 Use this when you want to explode an array field into multiple rows (one per element), similar to "UNNEST" in SQL.
 
 Common config:
@@ -122,7 +131,10 @@ Example: explode items into one row per item
   as: item
 ```
 
-### Filter (`io.kestra.plugin.transform.Filter`)
+### Filter
+```yaml
+type: io.kestra.plugin.transform.Filter
+```
 Use this when you want to keep/drop records based on a boolean expression, like a SQL `WHERE`.
 
 Common config:
@@ -158,7 +170,10 @@ Users often combine these to go from nested API responses to a clean, typed tabl
 ```
 Note: Unnest drops the exploded array field (`items` here) while keeping other fields.
 
-### Aggregate (`io.kestra.plugin.transform.Aggregate`)
+### Aggregate
+```yaml
+type: io.kestra.plugin.transform.Aggregate
+```
 Use this when you want typed group-by aggregates (count/sum/min/max) without exporting to a database.
 
 Common config:
@@ -186,7 +201,10 @@ Example: compute per-customer totals
   onError: FAIL
 ```
 
-### Zip (`io.kestra.plugin.transform.Zip`)
+### Zip
+```yaml
+type: io.kestra.plugin.transform.Zip
+```
 Use this when you have multiple sources already aligned by row order and want to merge them positionally (record i with record i).
 
 Common config:
