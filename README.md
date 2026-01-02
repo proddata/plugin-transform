@@ -149,27 +149,6 @@ Example: keep only expensive items
   where: item.price > 10
 ```
 
-### Map + Unnest + Filter (pipeline example)
-Users often combine these to go from nested API responses to a clean, typed table-like stream.
-```yaml
-
-- id: expensive_items
-  type: io.kestra.plugin.transform.Filter
-  from: "{{ outputs.explode_items.records }}"
-  where: item.price > 10
-
-- id: project
-  type: io.kestra.plugin.transform.Map
-  from: "{{ outputs.expensive_items.records }}"
-  fields:
-    customer_id: customer_id
-    sku: item.sku
-    price:
-      expr: item.price
-      type: DECIMAL
-```
-Note: Unnest drops the exploded array field (`items` here) while keeping other fields.
-
 ### Aggregate
 ```yaml
 type: io.kestra.plugin.transform.Aggregate
